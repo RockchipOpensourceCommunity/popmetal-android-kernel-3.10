@@ -166,6 +166,11 @@ static int bl_cpufreq_init(struct cpufreq_policy *policy)
 	err = cpufreq_frequency_table_cpuinfo(policy, bl_freqs);
 	if (err)
 		goto error;
+	/*
+	 * Publish frequency table so that it is available to governors
+	 * and sysfs:
+	 */
+	cpufreq_frequency_table_get_attr(bl_freqs, policy->cpu);
 
 	cluster = get_current_cluster(cpu);
 	per_cpu(cpu_cur_cluster, cpu) = cluster;
@@ -211,6 +216,11 @@ static unsigned int bl_cpufreq_get(unsigned int cpu)
 	return get_current_freq(cpu);
 }
 
+static struct freq_attr *bl_cpufreq_attrs[] = {
+	&cpufreq_freq_attr_scaling_available_freqs,
+	NULL
+};
+
 static struct cpufreq_driver __read_mostly bl_cpufreq_driver = {
 	.owner = THIS_MODULE,
 	.name = MODULE_NAME,
@@ -219,6 +229,7 @@ static struct cpufreq_driver __read_mostly bl_cpufreq_driver = {
 	.verify = bl_cpufreq_verify,
 	.target = bl_cpufreq_target,
 	.get = bl_cpufreq_get,
+	.attr = bl_cpufreq_attrs,
 	/* what else? */
 };
 
