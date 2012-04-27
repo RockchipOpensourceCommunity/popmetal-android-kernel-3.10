@@ -41,6 +41,12 @@
 #define CLUSTER_BIG	0
 #define CLUSTER_LITTLE	1
 
+/*
+ * Switch latency advertised to cpufreq.  This value is bogus and will
+ * need to be properly calibrated when running on real hardware.
+ */
+#define BL_CPUFREQ_FAKE_LATENCY 1
+
 static struct cpufreq_frequency_table __read_mostly bl_freqs[] = {
 	{ CLUSTER_BIG,		FREQ_BIG		},
 	{ CLUSTER_LITTLE,	FREQ_LITTLE		},
@@ -167,7 +173,7 @@ static int bl_cpufreq_init(struct cpufreq_policy *policy)
 	/*
 	 * Ideally, transition_latency should be calibrated here.
 	 */
-	policy->cpuinfo.transition_latency = CPUFREQ_ETERNAL;
+	policy->cpuinfo.transition_latency = BL_CPUFREQ_FAKE_LATENCY;
 	policy->cur = cluster_to_freq(cluster);
 	policy->shared_type = CPUFREQ_SHARED_TYPE_NONE;
 
