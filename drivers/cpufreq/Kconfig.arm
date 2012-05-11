@@ -14,6 +14,15 @@ config ARM_BL_CPUFREQ
 
 	  If unsure, say N.
 
+config ARM_BL_CPUFREQ_TEST
+	depends on ARM_BL_CPUFREQ
+	bool "Unit testing on cpufreq interface for the ARM big.LITTLE switcher"
+	help
+	  Make tests on the cpufreq interface for the ARM big.LITTLE
+	  switcher before loading it.
+
+	  If unsure, say N.
+
 config ARM_OMAP2PLUS_CPUFREQ
 	bool "TI OMAP2+"
 	depends on ARCH_OMAP2PLUS

@@ -18,7 +18,8 @@
  */
 
 #define MODULE_NAME "arm-bl-cpufreq"
-#define pr_fmt(fmt) MODULE_NAME ": " fmt
+#define __module_pr_fmt(prefix, fmt) MODULE_NAME ": " prefix fmt
+#define pr_fmt(fmt) __module_pr_fmt("", fmt)
 
 #include <linux/bug.h>
 #include <linux/cache.h>
@@ -32,6 +33,17 @@
 
 #include <asm/bL_switcher.h>
 
+#include "arm-bl-cpufreq.h"
+
+/*
+ * Include tests prototypes and includes
+ * We need to include this file a second time with ARM_BL_CPUFREQ_DEFINE_TESTS
+ * defined to include functions body.
+ */
+#include "arm-bl-cpufreq_tests.c"
+
+#define ARM_BL_CPUFREQ_DEFINE_TESTS
+#include "arm-bl-cpufreq_tests.c"
 
 /* Dummy frequencies representing the big and little clusters: */
 #define FREQ_BIG	1000000
@@ -40,22 +52,6 @@
 /*  Cluster numbers */
 #define CLUSTER_BIG	0
 #define CLUSTER_LITTLE	1
-
-/*
- * Switch latency advertised to cpufreq.  This value is bogus and will
- * need to be properly calibrated when running on real hardware.
- */
-#define BL_CPUFREQ_FAKE_LATENCY 1
-
-static struct cpufreq_frequency_table __read_mostly bl_freqs[] = {
-	{ CLUSTER_BIG,		FREQ_BIG		},
-	{ CLUSTER_LITTLE,	FREQ_LITTLE		},
-	{ 0,			CPUFREQ_TABLE_END	},
-};
-
-/* Cached current cluster for each CPU to save on IPIs */
-static DEFINE_PER_CPU(unsigned int, cpu_cur_cluster);
-
 
 /* Miscellaneous helpers */
 
@@ -237,12 +233,25 @@ static int __init bl_cpufreq_module_init(void)
 {
 	int err;
 
+	/* test_config :
+	 *	- 0: Do not run tests
+	 *	- 1: Run tests and then register cpufreq driver if tests passed
+	 */
+	if ((test_config > 0) && (pre_init_tests() != 0))
+		return -EINVAL;
+
 	err = cpufreq_register_driver(&bl_cpufreq_driver);
 	if(err)
 		pr_info("cpufreq backend driver registration failed (%d)\n",
 			err);
-	else
+	else {
 		pr_info("cpufreq backend driver registered.\n");
+
+		if ((test_config > 0) && (post_init_tests() != 0)) {
+			cpufreq_unregister_driver(&bl_cpufreq_driver);
+			return -EINVAL;
+		}
+	}
 
 	return err;
 }
