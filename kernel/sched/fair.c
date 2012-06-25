@@ -5572,6 +5572,7 @@ static void hmp_force_up_migration(int this_cpu)
 				target->push_cpu = hmp_select_fast_cpu(p);
 				target->migrate_task = p;
 				force = 1;
+				trace_sched_hmp_migrate(p, 1);
 			}
 		}
 		raw_spin_unlock_irqrestore(&target->lock, flags);

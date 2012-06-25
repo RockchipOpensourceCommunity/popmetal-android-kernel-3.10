@@ -551,6 +551,32 @@ TRACE_EVENT(sched_task_usage_ratio,
 			__entry->comm, __entry->pid,
 			__entry->ratio)
 );
+
+/*
+ * Tracepoint for HMP (CONFIG_SCHED_HMP) task migrations.
+ */
+TRACE_EVENT(sched_hmp_migrate,
+
+	TP_PROTO(struct task_struct *tsk, int val),
+
+	TP_ARGS(tsk, val),
+
+	TP_STRUCT__entry(
+		__array(char, comm, TASK_COMM_LEN)
+		__field(pid_t, pid)
+		__field(int,  val)
+	),
+
+	TP_fast_assign(
+	memcpy(__entry->comm, tsk->comm, TASK_COMM_LEN);
+		__entry->pid = tsk->pid;
+		__entry->val = val;
+	),
+
+	TP_printk("comm=%s pid=%d val=%d",
+			__entry->comm, __entry->pid,
+			__entry->val)
+);
 #endif /* _TRACE_SCHED_H */
 
 /* This part must be outside protection */
