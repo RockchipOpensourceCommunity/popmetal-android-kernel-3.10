@@ -1512,6 +1512,35 @@ config SCHED_SMT
 	  MultiThreading at a cost of slightly increased overhead in some
 	  places. If unsure say N here.
 
+config DISABLE_CPU_SCHED_DOMAIN_BALANCE
+	bool "(EXPERIMENTAL) Disable CPU level scheduler load-balancing"
+	help
+	  Disables scheduler load-balancing at CPU sched domain level.
+
+config SCHED_HMP
+	bool "(EXPERIMENTAL) Heterogenous multiprocessor scheduling"
+	depends on DISABLE_CPU_SCHED_DOMAIN_BALANCE && SCHED_MC && FAIR_GROUP_SCHED && !SCHED_AUTOGROUP
+	help
+	  Experimental scheduler optimizations for heterogeneous platforms.
+	  Attempts introspectively select task affinity to optimize power
+	  and performance. Currently support two types of CPUs: fast
+	  (high-performance) and slow (power-efficient). There is currently
+	  no support for migration of task groups, hence !SCHED_AUTOGROUP.
+
+config HMP_FAST_CPU_MASK
+	string "HMP scheduler fast CPU mask"
+	depends on SCHED_HMP
+	help
+	  Specifies the cpuids of the fast CPUs in the system as a list
+	  string, e.g. cpuid 0+1 should be specified as 0-1.
+
+config HMP_SLOW_CPU_MASK
+	string "HMP scheduler slow CPU mask"
+	depends on SCHED_HMP
+	help
+	  Specifies the cpuids of the slow CPUs in the system as a list
+	  string, e.g. cpuid 0+1 should be specified as 0-1.
+
 config HAVE_ARM_SCU
 	bool
 	help

@@ -3082,6 +3082,73 @@ done:
 	return target;
 }
 
+#ifdef CONFIG_SCHED_HMP
+/* Heterogenous multiprocessor (HMP) optimizations
+ * We need to know which cpus that are fast and slow. Ideally, this
+ * information would be provided by the platform in some way. For now it is
+ * set in the kernel config. */
+static struct cpumask hmp_fast_cpu_mask;
+static struct cpumask hmp_slow_cpu_mask;
+
+/* Setup fast and slow cpumasks.
+ * This should be setup based on device tree somehow. */
+static int __init hmp_cpu_mask_setup(void)
+{
+	char buf[64];
+
+	cpumask_clear(&hmp_fast_cpu_mask);
+	cpumask_clear(&hmp_slow_cpu_mask);
+
+	if (cpulist_parse(CONFIG_HMP_FAST_CPU_MASK, &hmp_fast_cpu_mask))
+		WARN(1, "Failed to parse HMP fast cpu mask!\n");
+	if (cpulist_parse(CONFIG_HMP_SLOW_CPU_MASK, &hmp_slow_cpu_mask))
+		WARN(1, "Failed to parse HMP slow cpu mask!\n");
+
+	printk(KERN_DEBUG "Initializing HMP scheduler:\n");
+	cpulist_scnprintf(buf, 64, &hmp_fast_cpu_mask);
+	printk(KERN_DEBUG "  fast cpus: %s\n", buf);
+	cpulist_scnprintf(buf, 64, &hmp_slow_cpu_mask);
+	printk(KERN_DEBUG "  slow cpus: %s\n", buf);
+
+	return 1;
+}
+early_initcall(hmp_cpu_mask_setup);
+
+/* Migration thresholds should be in the range [0..1023]
+ * hmp_up_threshold: min. load required for migrating tasks to a fast cpu
+ * hmp_down_threshold: max. load allowed for tasks migrating to a slow cpu
+ * hmp_up_prio: min. task prio for tasks migrating to faster cpus */
+unsigned int hmp_up_threshold = 512;
+unsigned int hmp_down_threshold = 256;
+unsigned int hmp_up_prio = 125;
+static unsigned int hmp_up_migration(int cpu, struct sched_entity *se);
+static unsigned int hmp_down_migration(int cpu, struct sched_entity *se);
+
+static unsigned int hmp_cpu_is_fast(int cpu)
+{
+	return cpumask_test_cpu(cpu, &hmp_fast_cpu_mask);
+}
+
+static unsigned int hmp_cpu_is_slow(int cpu)
+{
+	return cpumask_test_cpu(cpu, &hmp_slow_cpu_mask);
+}
+
+/* Select target cpu for HMP migration to fast cpu
+ * returns target >= nr_cpu_ids if no fast cpus in affinity mask */
+static inline unsigned int hmp_select_fast_cpu(struct task_struct *tsk)
+{
+	return cpumask_any_and(&hmp_fast_cpu_mask, tsk_cpus_allowed(tsk));
+}
+
+/* Select target cpu for HMP migration to slow cpu
+ * returns target >= nr_cpu_ids if no slow cpus in affinity mask */
+static inline unsigned int hmp_select_slow_cpu(struct task_struct *tsk)
+{
+	return cpumask_any_and(&hmp_slow_cpu_mask, tsk_cpus_allowed(tsk));
+}
+#endif /* CONFIG_SCHED_HMP */
+
 /*
  * sched_balance_self: balance the current task (running on cpu) in domains
  * that have the 'flag' flag set. In practice, this is SD_BALANCE_FORK and
@@ -3207,6 +3274,19 @@ select_task_rq_fair(struct task_struct *p, int sd_flag, int wake_flags)
 	}
 unlock:
 	rcu_read_unlock();
+
+#ifdef CONFIG_SCHED_HMP
+	if (hmp_up_migration(new_cpu, &p->se)) {
+		cpu = hmp_select_fast_cpu(p);
+		if (cpu < nr_cpu_ids)
+			return cpu;
+	}
+	if (hmp_down_migration(new_cpu, &p->se)) {
+		cpu = hmp_select_slow_cpu(p);
+		if (cpu < nr_cpu_ids)
+			return cpu;
+	}
+#endif
 
 	return new_cpu;
 }
@@ -5289,6 +5369,31 @@ need_kick:
 #else
 static void nohz_idle_balance(int this_cpu, enum cpu_idle_type idle) { }
 #endif
+
+#ifdef CONFIG_SCHED_HMP
+/* Check if task should migrate to a faster core */
+static unsigned int hmp_up_migration(int cpu, struct sched_entity *se)
+{
+	struct task_struct *p = task_of(se);
+	if (p->prio < hmp_up_prio && p->prio > 100
+		&& hmp_cpu_is_slow(cpu)
+		&& se->avg.load_avg_ratio > hmp_up_threshold) {
+		return 1;
+	}
+	return 0;
+}
+
+/* Check if task should migrate to a slower core */
+static unsigned int hmp_down_migration(int cpu, struct sched_entity *se)
+{
+	struct task_struct *p = task_of(se);
+	if (p->prio >= hmp_up_prio || (hmp_cpu_is_fast(cpu)
+		&& se->avg.load_avg_ratio < hmp_down_threshold)) {
+		return 1;
+	}
+	return 0;
+}
+#endif /* CONFIG_SCHED_HMP */
 
 /*
  * run_rebalance_domains is triggered when needed from the scheduler tick.
