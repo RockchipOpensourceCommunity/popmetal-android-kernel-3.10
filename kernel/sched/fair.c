@@ -1175,7 +1175,8 @@ static inline void __update_task_entity_contrib(struct sched_entity *se)
 	trace_sched_task_load_contrib(task_of(se), se->avg.load_avg_contrib);
 	contrib = se->avg.runnable_avg_sum * scale_load_down(1024);
 	contrib /= (se->avg.runnable_avg_period + 1);
-	trace_sched_task_runnable_ratio(task_of(se), scale_load(contrib));
+	se->avg.load_avg_ratio = scale_load(contrib);
+	trace_sched_task_runnable_ratio(task_of(se), se->avg.load_avg_ratio);
 	contrib = se->avg.usage_avg_sum * scale_load_down(1024);
 	contrib /= (se->avg.runnable_avg_period + 1);
 	trace_sched_task_usage_ratio(task_of(se), scale_load(contrib));
