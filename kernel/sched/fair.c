@@ -3084,25 +3084,19 @@ done:
 
 #ifdef CONFIG_SCHED_HMP
 /* Heterogenous multiprocessor (HMP) optimizations
- * We need to know which cpus that are fast and slow. Ideally, this
- * information would be provided by the platform in some way. For now it is
- * set in the kernel config. */
+ * We need to know which cpus that are fast and slow. */
 static struct cpumask hmp_fast_cpu_mask;
 static struct cpumask hmp_slow_cpu_mask;
 
-/* Setup fast and slow cpumasks.
- * This should be setup based on device tree somehow. */
+extern void __init arch_get_fast_and_slow_cpus(struct cpumask *fast,
+					       struct cpumask *slow);
+
+/* Setup fast and slow cpumasks. */
 static int __init hmp_cpu_mask_setup(void)
 {
 	char buf[64];
 
-	cpumask_clear(&hmp_fast_cpu_mask);
-	cpumask_clear(&hmp_slow_cpu_mask);
-
-	if (cpulist_parse(CONFIG_HMP_FAST_CPU_MASK, &hmp_fast_cpu_mask))
-		WARN(1, "Failed to parse HMP fast cpu mask!\n");
-	if (cpulist_parse(CONFIG_HMP_SLOW_CPU_MASK, &hmp_slow_cpu_mask))
-		WARN(1, "Failed to parse HMP slow cpu mask!\n");
+	arch_get_fast_and_slow_cpus(&hmp_fast_cpu_mask, &hmp_slow_cpu_mask);
 
 	printk(KERN_DEBUG "Initializing HMP scheduler:\n");
 	cpulist_scnprintf(buf, 64, &hmp_fast_cpu_mask);
