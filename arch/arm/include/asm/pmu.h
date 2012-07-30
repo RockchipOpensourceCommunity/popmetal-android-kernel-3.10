@@ -91,6 +91,23 @@ struct arm_pmu {
 
 #define to_arm_pmu(p) (container_of(p, struct arm_pmu, pmu))
 
+struct cpu_pmu_info {
+	struct list_head entry;
+	char compatible[32];
+	unsigned long impl;
+	unsigned long part;
+	int (*init)(struct arm_pmu *);
+};
+
+#define CPUPMU_INFO_ENTRY(_compatible, _impl, _part, _init)	{\
+		.compatible	= _compatible,			\
+		.impl		= _impl,			\
+		.part		= _part,			\
+		.init		= _init,			\
+	}
+
+int cpu_pmu_register(struct cpu_pmu_info *cpu_pmu);
+
 extern const struct dev_pm_ops armpmu_dev_pm_ops;
 
 int armpmu_register(struct arm_pmu *armpmu, char *name, int type);

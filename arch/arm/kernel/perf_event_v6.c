@@ -31,6 +31,15 @@
  */
 
 #if defined(CONFIG_CPU_V6) || defined(CONFIG_CPU_V6K)
+#include <linux/interrupt.h>
+#include <linux/kernel.h>
+#include <linux/perf_event.h>
+#include <linux/platform_device.h>
+#include <linux/spinlock.h>
+
+#include <asm/irq_regs.h>
+#include <asm/pmu.h>
+
 enum armv6_perf_types {
 	ARMV6_PERFCTR_ICACHE_MISS	    = 0x0,
 	ARMV6_PERFCTR_IBUF_STALL	    = 0x1,
@@ -700,14 +709,23 @@ static int __devinit armv6mpcore_pmu_init(struct arm_pmu *cpu_pmu)
 	cpu_pmu->max_period	= (1LLU << 32) - 1;
 	return 0;
 }
-#else
-static int armv6pmu_init(struct arm_pmu *cpu_pmu)
+
+static struct __devinit cpu_pmu_info armv6_pmu_info[] = {
+	CPUPMU_INFO_ENTRY(__stringify(arm,arm11mpcore-pmu), 0x41, 0xB020,
+							armv6mpcore_pmu_init),
+	CPUPMU_INFO_ENTRY(__stringify(arm,arm1176-pmu), 0x41, 0xB760,
+							armv6pmu_init),
+	CPUPMU_INFO_ENTRY(__stringify(arm,arm1136-pmu), 0x41, 0xB360,
+							armv6pmu_init),
+};
+
+static int __init register_armv6pmu_driver(void)
 {
-	return -ENODEV;
+	int i;
+	for (i = 0; i < ARRAY_SIZE(armv6_pmu_info); i++)
+		WARN_ON(cpu_pmu_register(&armv6_pmu_info[i]));
+	return 0;
 }
 
-static int armv6mpcore_pmu_init(struct arm_pmu *cpu_pmu)
-{
-	return -ENODEV;
-}
+early_initcall(register_armv6pmu_driver);
 #endif	/* CONFIG_CPU_V6 || CONFIG_CPU_V6K */

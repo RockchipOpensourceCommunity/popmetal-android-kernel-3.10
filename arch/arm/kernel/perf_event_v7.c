@@ -18,6 +18,15 @@
 
 #ifdef CONFIG_CPU_V7
 
+#include <linux/interrupt.h>
+#include <linux/kernel.h>
+#include <linux/perf_event.h>
+#include <linux/platform_device.h>
+#include <linux/spinlock.h>
+
+#include <asm/irq_regs.h>
+#include <asm/pmu.h>
+
 /*
  * Common ARMv7 event types
  *
@@ -1283,29 +1292,27 @@ static int __devinit armv7_a7_pmu_init(struct arm_pmu *cpu_pmu)
 	cpu_pmu->set_event_filter = armv7pmu_set_event_filter;
 	return 0;
 }
-#else
-static inline int armv7_a8_pmu_init(struct arm_pmu *cpu_pmu)
+
+static struct cpu_pmu_info armv7_pmu_info[] __devinitdata = {
+	CPUPMU_INFO_ENTRY(__stringify(arm,cortex-a15-pmu), 0x41, 0xC0F0,
+						armv7_a15_pmu_init),
+	CPUPMU_INFO_ENTRY(__stringify(arm,cortex-a9-pmu), 0x41, 0xC090,
+						armv7_a9_pmu_init),
+	CPUPMU_INFO_ENTRY(__stringify(arm,cortex-a8-pmu), 0x41, 0xC080,
+						armv7_a8_pmu_init),
+	CPUPMU_INFO_ENTRY(__stringify(arm,cortex-a7-pmu), 0x41, 0xC070,
+						armv7_a7_pmu_init),
+	CPUPMU_INFO_ENTRY(__stringify(arm,cortex-a5-pmu), 0x41, 0xC050,
+						armv7_a5_pmu_init),
+};
+
+static int __init register_armv7pmu_driver(void)
 {
-	return -ENODEV;
+	int i;
+	for (i = 0; i < ARRAY_SIZE(armv7_pmu_info); i++)
+		WARN_ON(cpu_pmu_register(&armv7_pmu_info[i]));
+	return 0;
 }
 
-static inline int armv7_a9_pmu_init(struct arm_pmu *cpu_pmu)
-{
-	return -ENODEV;
-}
-
-static inline int armv7_a5_pmu_init(struct arm_pmu *cpu_pmu)
-{
-	return -ENODEV;
-}
-
-static inline int armv7_a15_pmu_init(struct arm_pmu *cpu_pmu)
-{
-	return -ENODEV;
-}
-
-static inline int armv7_a7_pmu_init(struct arm_pmu *cpu_pmu)
-{
-	return -ENODEV;
-}
+early_initcall(register_armv7pmu_driver);
 #endif	/* CONFIG_CPU_V7 */

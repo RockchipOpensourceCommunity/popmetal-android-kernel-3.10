@@ -13,6 +13,15 @@
  */
 
 #ifdef CONFIG_CPU_XSCALE
+#include <linux/interrupt.h>
+#include <linux/kernel.h>
+#include <linux/perf_event.h>
+#include <linux/platform_device.h>
+#include <linux/spinlock.h>
+
+#include <asm/irq_regs.h>
+#include <asm/pmu.h>
+
 enum xscale_perf_types {
 	XSCALE_PERFCTR_ICACHE_MISS		= 0x00,
 	XSCALE_PERFCTR_ICACHE_NO_DELIVER	= 0x01,
@@ -825,14 +834,21 @@ static int __devinit xscale2pmu_init(struct arm_pmu *cpu_pmu)
 	cpu_pmu->max_period	= (1LLU << 32) - 1;
 	return 0;
 }
-#else
-static inline int xscale1pmu_init(struct arm_pmu *cpu_pmu)
+
+static struct __devinit cpu_pmu_info xscale_pmu_info[] = {
+	CPUPMU_INFO_ENTRY(__stringify(arm,xscale1-pmu), 0x69, 0x1,
+							xscale1pmu_init),
+	CPUPMU_INFO_ENTRY(__stringify(arm,xscale2-pmu), 0x69, 0x2,
+							xscale2pmu_init),
+};
+
+static int __init register_xscalepmu_driver(void)
 {
-	return -ENODEV;
+	int i;
+	for (i = 0; i < ARRAY_SIZE(xscale_pmu_info); i++)
+		WARN_ON(cpu_pmu_register(&xscale_pmu_info[i]));
+	return 0;
 }
 
-static inline int xscale2pmu_init(struct arm_pmu *cpu_pmu)
-{
-	return -ENODEV;
-}
+early_initcall(register_xscalepmu_driver);
 #endif	/* CONFIG_CPU_XSCALE */

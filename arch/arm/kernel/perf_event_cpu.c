@@ -34,6 +34,7 @@ static DEFINE_PER_CPU(struct perf_event * [ARMPMU_MAX_HWEVENTS], hw_events);
 static DEFINE_PER_CPU(unsigned long [BITS_TO_LONGS(ARMPMU_MAX_HWEVENTS)], used_mask);
 static DEFINE_PER_CPU(struct pmu_hw_events, cpu_hw_events);
 static DEFINE_PER_CPU(struct arm_pmu *, armcpu_pmu);
+static LIST_HEAD(cpupmu_list);
 
 /*
  * Despite the names, these two functions are CPU-specific and are used
@@ -60,11 +61,6 @@ int perf_num_counters(void)
 	return max_events;
 }
 EXPORT_SYMBOL_GPL(perf_num_counters);
-
-/* Include the PMU-specific implementations. */
-#include "perf_event_xscale.c"
-#include "perf_event_v6.c"
-#include "perf_event_v7.c"
 
 static struct pmu_hw_events *cpu_pmu_get_cpu_events(void)
 {
@@ -175,18 +171,52 @@ static struct notifier_block __cpuinitdata cpu_pmu_hotplug_notifier = {
 	.notifier_call = cpu_pmu_notify,
 };
 
+int cpu_pmu_register(struct cpu_pmu_info *cpupmu_info)
+{
+	if (!strlen(cpupmu_info->compatible) ||	!cpupmu_info->init
+			|| (!cpupmu_info->impl && !cpupmu_info->part))
+		return -EINVAL;
+	list_add(&cpupmu_info->entry, &cpupmu_list);
+	return 0;
+}
+
+struct cpu_pmu_info *cpupmu_match_compatible(const char *compatible)
+{
+	struct cpu_pmu_info *temp, *pmu_info = ERR_PTR(-ENODEV);
+	list_for_each_entry(temp, &cpupmu_list, entry) {
+		if (!strcmp(compatible, temp->compatible)) {
+			pmu_info = temp;
+			break;
+		}
+	}
+	return pmu_info;
+}
+
+struct cpu_pmu_info *cpupmu_match_impl_part(unsigned long impl,
+						unsigned long part)
+{
+	struct cpu_pmu_info *temp, *pmu_info = ERR_PTR(-ENODEV);
+	list_for_each_entry(temp, &cpupmu_list, entry) {
+		if (impl == temp->impl && part == temp->part) {
+			pmu_info = temp;
+			break;
+		}
+	}
+	return pmu_info;
+}
+
 /*
  * PMU platform driver and devicetree bindings.
  */
 static struct of_device_id __devinitdata cpu_pmu_of_device_ids[] = {
-	{.compatible = "arm,cortex-a15-pmu",	.data = armv7_a15_pmu_init},
-	{.compatible = "arm,cortex-a9-pmu",	.data = armv7_a9_pmu_init},
-	{.compatible = "arm,cortex-a8-pmu",	.data = armv7_a8_pmu_init},
-	{.compatible = "arm,cortex-a7-pmu",	.data = armv7_a7_pmu_init},
-	{.compatible = "arm,cortex-a5-pmu",	.data = armv7_a5_pmu_init},
-	{.compatible = "arm,arm11mpcore-pmu",	.data = armv6mpcore_pmu_init},
-	{.compatible = "arm,arm1176-pmu",	.data = armv6pmu_init},
-	{.compatible = "arm,arm1136-pmu",	.data = armv6pmu_init},
+	{.compatible = "arm,cortex-a15-pmu"},
+	{.compatible = "arm,cortex-a9-pmu"},
+	{.compatible = "arm,cortex-a8-pmu"},
+	{.compatible = "arm,cortex-a7-pmu"},
+	{.compatible = "arm,cortex-a5-pmu"},
+	{.compatible = "arm,arm11mpcore-pmu"},
+	{.compatible = "arm,arm1176-pmu"},
+	{.compatible = "arm,arm1136-pmu"},
 	{},
 };
 
@@ -204,50 +234,18 @@ static int __devinit probe_current_pmu(struct arm_pmu *pmu)
 	unsigned long cpuid = read_cpuid_id();
 	unsigned long implementor = (cpuid & 0xFF000000) >> 24;
 	unsigned long part_number = (cpuid & 0xFFF0);
+	struct cpu_pmu_info *pmu_info = NULL;
 	int ret = -ENODEV;
 
 	pr_info("probing PMU on CPU %d\n", cpu);
 
-	/* ARM Ltd CPUs. */
-	if (0x41 == implementor) {
-		switch (part_number) {
-		case 0xB360:	/* ARM1136 */
-		case 0xB560:	/* ARM1156 */
-		case 0xB760:	/* ARM1176 */
-			ret = armv6pmu_init(pmu);
-			break;
-		case 0xB020:	/* ARM11mpcore */
-			ret = armv6mpcore_pmu_init(pmu);
-			break;
-		case 0xC080:	/* Cortex-A8 */
-			ret = armv7_a8_pmu_init(pmu);
-			break;
-		case 0xC090:	/* Cortex-A9 */
-			ret = armv7_a9_pmu_init(pmu);
-			break;
-		case 0xC050:	/* Cortex-A5 */
-			ret = armv7_a5_pmu_init(pmu);
-			break;
-		case 0xC0F0:	/* Cortex-A15 */
-			ret = armv7_a15_pmu_init(pmu);
-			break;
-		case 0xC070:	/* Cortex-A7 */
-			ret = armv7_a7_pmu_init(pmu);
-			break;
-		}
 	/* Intel CPUs [xscale]. */
-	} else if (0x69 == implementor) {
+	if (0x69 == implementor)
 		part_number = (cpuid >> 13) & 0x7;
-		switch (part_number) {
-		case 1:
-			ret = xscale1pmu_init(pmu);
-			break;
-		case 2:
-			ret = xscale2pmu_init(pmu);
-			break;
-		}
-	}
 
+	pmu_info = cpupmu_match_impl_part(implementor, part_number);
+	if (!IS_ERR_OR_NULL(pmu_info))
+		ret = pmu_info->init(pmu);
 	put_cpu();
 	return ret;
 }
@@ -255,7 +253,7 @@ static int __devinit probe_current_pmu(struct arm_pmu *pmu)
 static int __devinit cpu_pmu_device_probe(struct platform_device *pdev)
 {
 	const struct of_device_id *of_id;
-	int (*init_fn)(struct arm_pmu *);
+	struct cpu_pmu_info *pmu_info = NULL;
 	struct device_node *node = pdev->dev.of_node;
 	struct arm_pmu *cpupmu;
 	int ret = -ENODEV;
@@ -268,8 +266,9 @@ static int __devinit cpu_pmu_device_probe(struct platform_device *pdev)
 	}
 
 	if (node && (of_id = of_match_node(cpu_pmu_of_device_ids, pdev->dev.of_node))) {
-		init_fn = of_id->data;
-		ret = init_fn(cpupmu);
+		pmu_info = cpupmu_match_compatible(of_id->compatible);
+		if (!IS_ERR_OR_NULL(pmu_info))
+			ret = pmu_info->init(cpupmu);
 	} else {
 		ret = probe_current_pmu(cpupmu);
 	}
