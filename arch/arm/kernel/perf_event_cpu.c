@@ -30,12 +30,10 @@
 #include <asm/irq_regs.h>
 #include <asm/pmu.h>
 
-/* Set at runtime when we know what CPU type we are. */
-static struct arm_pmu *cpu_pmu;
-
 static DEFINE_PER_CPU(struct perf_event * [ARMPMU_MAX_HWEVENTS], hw_events);
 static DEFINE_PER_CPU(unsigned long [BITS_TO_LONGS(ARMPMU_MAX_HWEVENTS)], used_mask);
 static DEFINE_PER_CPU(struct pmu_hw_events, cpu_hw_events);
+static DEFINE_PER_CPU(struct arm_pmu *, armcpu_pmu);
 
 /*
  * Despite the names, these two functions are CPU-specific and are used
@@ -43,6 +41,7 @@ static DEFINE_PER_CPU(struct pmu_hw_events, cpu_hw_events);
  */
 const char *perf_pmu_name(void)
 {
+	struct arm_pmu *cpu_pmu = per_cpu(armcpu_pmu, 0);
 	if (!cpu_pmu)
 		return NULL;
 
@@ -52,6 +51,7 @@ EXPORT_SYMBOL_GPL(perf_pmu_name);
 
 int perf_num_counters(void)
 {
+	struct arm_pmu *cpu_pmu = per_cpu(armcpu_pmu, 0);
 	int max_events = 0;
 
 	if (cpu_pmu != NULL)
@@ -160,6 +160,8 @@ static void __devinit cpu_pmu_init(struct arm_pmu *cpu_pmu)
 static int __cpuinit cpu_pmu_notify(struct notifier_block *b,
 				    unsigned long action, void *hcpu)
 {
+	int cpu = smp_processor_id();
+	struct arm_pmu *cpu_pmu = per_cpu(armcpu_pmu, cpu);
 	if ((action & ~CPU_TASKS_FROZEN) != CPU_STARTING)
 		return NOTIFY_DONE;
 
@@ -257,11 +259,7 @@ static int __devinit cpu_pmu_device_probe(struct platform_device *pdev)
 	struct device_node *node = pdev->dev.of_node;
 	struct arm_pmu *cpupmu;
 	int ret = -ENODEV;
-
-	if (cpu_pmu) {
-		pr_info("attempt to register multiple PMU devices!");
-		return -ENOSPC;
-	}
+	int cpu;
 
 	cpupmu = kzalloc(sizeof(struct arm_pmu), GFP_KERNEL);
 	if (IS_ERR_OR_NULL(cpupmu)) {
@@ -282,12 +280,13 @@ static int __devinit cpu_pmu_device_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	cpu_pmu = cpupmu; /* need elimate the global cpu_pmu soon */
-
 	cpupmu->plat_device = pdev;
 	cpu_pmu_init(cpupmu);
 	register_cpu_notifier(&cpu_pmu_hotplug_notifier);
 	armpmu_register(cpupmu, cpupmu->name, PERF_TYPE_RAW);
+
+	for_each_possible_cpu(cpu)
+		per_cpu(armcpu_pmu, cpu) = cpupmu;
 
 	return 0;
 }
