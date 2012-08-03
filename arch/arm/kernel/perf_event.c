@@ -419,6 +419,10 @@ static int armpmu_event_init(struct perf_event *event)
 	int err = 0;
 	atomic_t *active_events = &armpmu->active_events;
 
+	pr_debug("cpu %d events 0x%llx\n", event->cpu, event->attr.config);
+	if (event->cpu != -1 && !cpumask_test_cpu(event->cpu, &armpmu->cpus))
+		return -ENOENT;
+
 	/* does not support taken branch sampling */
 	if (has_branch_stack(event))
 		return -EOPNOTSUPP;

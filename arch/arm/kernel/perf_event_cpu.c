@@ -71,11 +71,13 @@ static void cpu_pmu_free_irq(struct arm_pmu *cpu_pmu)
 {
 	int i, irq, irqs;
 	struct platform_device *pmu_device = cpu_pmu->plat_device;
+	int cpu = -1;
 
 	irqs = min(pmu_device->num_resources, num_possible_cpus());
 
 	for (i = 0; i < irqs; ++i) {
-		if (!cpumask_test_and_clear_cpu(i, &cpu_pmu->active_irqs))
+		cpu = cpumask_next(cpu, &cpu_pmu->cpus);
+		if (!cpumask_test_and_clear_cpu(cpu, &cpu_pmu->active_irqs))
 			continue;
 		irq = platform_get_irq(pmu_device, i);
 		if (irq >= 0)
@@ -87,6 +89,7 @@ static int cpu_pmu_request_irq(struct arm_pmu *cpu_pmu, irq_handler_t handler)
 {
 	int i, err, irq, irqs;
 	struct platform_device *pmu_device = cpu_pmu->plat_device;
+	int cpu = -1;
 
 	if (!pmu_device)
 		return -ENODEV;
@@ -99,6 +102,7 @@ static int cpu_pmu_request_irq(struct arm_pmu *cpu_pmu, irq_handler_t handler)
 
 	for (i = 0; i < irqs; ++i) {
 		err = 0;
+		cpu = cpumask_next(cpu, &cpu_pmu->cpus);
 		irq = platform_get_irq(pmu_device, i);
 		if (irq < 0)
 			continue;
@@ -108,7 +112,7 @@ static int cpu_pmu_request_irq(struct arm_pmu *cpu_pmu, irq_handler_t handler)
 		 * assume that we're running on a uniprocessor machine and
 		 * continue. Otherwise, continue without this interrupt.
 		 */
-		if (irq_set_affinity(irq, cpumask_of(i)) && irqs > 1) {
+		if (irq_set_affinity(irq, cpumask_of(cpu)) && irqs > 1) {
 			pr_warning("unable to set irq affinity (irq=%d, cpu=%u)\n",
 				    irq, i);
 			continue;
@@ -122,7 +126,7 @@ static int cpu_pmu_request_irq(struct arm_pmu *cpu_pmu, irq_handler_t handler)
 			return err;
 		}
 
-		cpumask_set_cpu(i, &cpu_pmu->active_irqs);
+		cpumask_set_cpu(cpu, &cpu_pmu->active_irqs);
 	}
 
 	return 0;
@@ -141,10 +145,6 @@ static void __devinit cpu_pmu_init(struct arm_pmu *cpu_pmu)
 	cpu_pmu->get_hw_events	= cpu_pmu_get_cpu_events;
 	cpu_pmu->request_irq	= cpu_pmu_request_irq;
 	cpu_pmu->free_irq	= cpu_pmu_free_irq;
-
-	/* Ensure the PMU has sane values out of reset. */
-	if (cpu_pmu && cpu_pmu->reset)
-		on_each_cpu(cpu_pmu->reset, cpu_pmu, 1);
 }
 
 /*
@@ -254,10 +254,10 @@ static int __devinit cpu_pmu_device_probe(struct platform_device *pdev)
 {
 	const struct of_device_id *of_id;
 	struct cpu_pmu_info *pmu_info = NULL;
-	struct device_node *node = pdev->dev.of_node;
+	struct device_node *node = pdev->dev.of_node, *ncluster;
 	struct arm_pmu *cpupmu;
-	int ret = -ENODEV;
-	int cpu;
+	int ret = 0;
+	int cluster = -1;
 
 	cpupmu = kzalloc(sizeof(struct arm_pmu), GFP_KERNEL);
 	if (IS_ERR_OR_NULL(cpupmu)) {
@@ -267,8 +267,29 @@ static int __devinit cpu_pmu_device_probe(struct platform_device *pdev)
 
 	if (node && (of_id = of_match_node(cpu_pmu_of_device_ids, pdev->dev.of_node))) {
 		pmu_info = cpupmu_match_compatible(of_id->compatible);
-		if (!IS_ERR_OR_NULL(pmu_info))
-			ret = pmu_info->init(cpupmu);
+		if (!IS_ERR_OR_NULL(pmu_info)) {
+			int sibling;
+			cpumask_t sibling_mask;
+			smp_call_func_t init = (smp_call_func_t)pmu_info->init;
+			ncluster = of_parse_phandle(node, "cluster", 0);
+			if (ncluster) {
+				int len;
+				const u32 *hwid;
+				hwid = of_get_property(ncluster, "reg", &len);
+				if (hwid && len == 4)
+					cluster = be32_to_cpup(hwid);
+			}
+			/* set sibling mask to all cpu mask if socket is not specified */
+			if (cluster == -1 ||
+				cluster_to_logical_mask(cluster, &sibling_mask))
+				cpumask_copy(&sibling_mask, cpu_possible_mask);
+			smp_call_function_any(&sibling_mask, init, cpupmu, 1);
+			for_each_cpu(sibling, &sibling_mask)
+				per_cpu(armcpu_pmu, sibling) = cpupmu;
+			cpumask_copy(&cpupmu->cpus, &sibling_mask);
+			/* Ensure the PMU has sane values out of reset */
+			on_each_cpu_mask(&sibling_mask, cpupmu->reset, cpupmu, 1);
+		}
 	} else {
 		ret = probe_current_pmu(cpupmu);
 	}
@@ -281,11 +302,9 @@ static int __devinit cpu_pmu_device_probe(struct platform_device *pdev)
 
 	cpupmu->plat_device = pdev;
 	cpu_pmu_init(cpupmu);
-	register_cpu_notifier(&cpu_pmu_hotplug_notifier);
+	if (!cluster)
+		register_cpu_notifier(&cpu_pmu_hotplug_notifier);
 	armpmu_register(cpupmu, cpupmu->name, PERF_TYPE_RAW);
-
-	for_each_possible_cpu(cpu)
-		per_cpu(armcpu_pmu, cpu) = cpupmu;
 
 	return 0;
 }
