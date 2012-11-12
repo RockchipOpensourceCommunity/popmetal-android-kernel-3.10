@@ -223,7 +223,7 @@ void update_packing_domain(int cpu)
 		sd = sd->parent;
 	}
 
-	pr_info(KERN_INFO "CPU%d packing on CPU%d\n", cpu, id);
+	pr_info("CPU%d packing on CPU%d\n", cpu, id);
 	per_cpu(sd_pack_buddy, cpu) = id;
 }
 
