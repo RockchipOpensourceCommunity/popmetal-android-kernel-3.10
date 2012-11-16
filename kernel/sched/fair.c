@@ -179,7 +179,8 @@ void update_packing_domain(int cpu)
 	if (!sd)
 		sd = rcu_dereference_check_sched_domain(cpu_rq(cpu)->sd);
 	else
-		sd = sd->parent;
+		if (cpumask_first(sched_domain_span(sd)) == cpu || !sd->parent)
+			sd = sd->parent;
 
 	while (sd) {
 		struct sched_group *sg = sd->groups;
@@ -189,6 +190,18 @@ void update_packing_domain(int cpu)
 		/* 1st CPU of the sched domain is a good candidate */
 		if (id == -1)
 			id = cpumask_first(sched_domain_span(sd));
+
+		/* Find sched group of candidate */
+		tmp = sd->groups;
+		do {
+			if (cpumask_test_cpu(id, sched_group_cpus(tmp))) {
+				sg = tmp;
+				break;
+			}
+		} while (tmp = tmp->next, tmp != sd->groups);
+
+		pack = sg;
+		tmp = sg->next;
 
 		/* loop the sched groups to find the best one */
 		while (tmp != sg) {
