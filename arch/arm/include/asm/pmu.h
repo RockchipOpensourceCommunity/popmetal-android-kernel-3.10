@@ -75,6 +75,7 @@ struct cpupmu_regs {
 
 struct arm_cpu_pmu {
 	bool			valid;
+	bool			active;
 
 	u32			midr_match;
 	u32			midr_mask;
@@ -83,6 +84,8 @@ struct arm_cpu_pmu {
 	unsigned long		used_mask[BITS_TO_LONGS(ARMPMU_MAX_HWEVENTS)];
 	struct pmu_hw_events	cpu_hw_events;
 	struct cpupmu_regs	cpu_pmu_regs;
+
+	void			*logical_state;
 };
 
 struct arm_pmu {
@@ -121,6 +124,8 @@ struct arm_pmu {
 #define to_arm_pmu(p) (container_of(p, struct arm_pmu, pmu))
 
 #define for_each_pmu(pmu, head) list_for_each_entry(pmu, head, class_pmus_list)
+
+#define to_this_cpu_pmu(arm_pmu) this_cpu_ptr((arm_pmu)->cpu_pmus)
 
 extern const struct dev_pm_ops armpmu_dev_pm_ops;
 
