@@ -1435,8 +1435,13 @@ static int armv7_a7_map_event(struct perf_event *event)
 				&armv7_a7_perf_cache_map, 0xFF);
 }
 
+static void armv7pmu_cpu_init(struct arm_pmu *pmu,
+					struct arm_cpu_pmu *cpupmu);
+
 static void armv7pmu_init(struct arm_pmu *cpu_pmu)
 {
+	struct arm_cpu_pmu *cpu_pmus = cpu_pmu->cpu_pmus;
+
 	cpu_pmu->handle_irq	= armv7pmu_handle_irq;
 	cpu_pmu->enable		= armv7pmu_enable_event;
 	cpu_pmu->disable	= armv7pmu_disable_event;
@@ -1448,7 +1453,10 @@ static void armv7pmu_init(struct arm_pmu *cpu_pmu)
 	cpu_pmu->reset		= armv7pmu_reset;
 	cpu_pmu->save_regs	= armv7pmu_save_regs;
 	cpu_pmu->restore_regs	= armv7pmu_restore_regs;
+	cpu_pmu->cpu_init	= armv7pmu_cpu_init;
 	cpu_pmu->max_period	= (1LLU << 32) - 1;
+
+	cpu_pmu->cpu_pmus = cpu_pmus;
 };
 
 static u32 armv7_read_num_pmnc_events(void)
@@ -1463,10 +1471,9 @@ static u32 armv7_read_num_pmnc_events(void)
 	return nb_cnt + 1;
 }
 
-static void __v7_pmu_init_logical_state(struct arm_pmu *pmu)
+static void armv7pmu_cpu_init(struct arm_pmu *pmu,
+			      struct arm_cpu_pmu *cpupmu)
 {
-	struct arm_cpu_pmu *cpupmu = to_this_cpu_pmu(pmu);
-
 	size_t size = offsetof(struct armv7_pmu_logical_state, cntrs) +
 		pmu->num_events * sizeof(*__v7_logical_state(cpupmu));
 
@@ -1495,7 +1502,6 @@ static int armv7_a8_pmu_init(struct arm_pmu *cpu_pmu)
 	cpu_pmu->name		= "ARMv7 Cortex-A8";
 	cpu_pmu->map_event	= armv7_a8_map_event;
 	cpu_pmu->num_events	= armv7_read_num_pmnc_events();
-	__v7_pmu_init_logical_state(cpu_pmu);
 	return 0;
 }
 
@@ -1505,7 +1511,6 @@ static int armv7_a9_pmu_init(struct arm_pmu *cpu_pmu)
 	cpu_pmu->name		= "ARMv7 Cortex-A9";
 	cpu_pmu->map_event	= armv7_a9_map_event;
 	cpu_pmu->num_events	= armv7_read_num_pmnc_events();
-	__v7_pmu_init_logical_state(cpu_pmu);
 	return 0;
 }
 
@@ -1515,7 +1520,6 @@ static int armv7_a5_pmu_init(struct arm_pmu *cpu_pmu)
 	cpu_pmu->name		= "ARMv7 Cortex-A5";
 	cpu_pmu->map_event	= armv7_a5_map_event;
 	cpu_pmu->num_events	= armv7_read_num_pmnc_events();
-	__v7_pmu_init_logical_state(cpu_pmu);
 	return 0;
 }
 
@@ -1526,7 +1530,6 @@ static int armv7_a15_pmu_init(struct arm_pmu *cpu_pmu)
 	cpu_pmu->map_event	= armv7_a15_map_event;
 	cpu_pmu->num_events	= armv7_read_num_pmnc_events();
 	cpu_pmu->set_event_filter = armv7pmu_set_event_filter;
-	__v7_pmu_init_logical_state(cpu_pmu);
 	return 0;
 }
 
@@ -1537,7 +1540,6 @@ static int armv7_a7_pmu_init(struct arm_pmu *cpu_pmu)
 	cpu_pmu->map_event	= armv7_a7_map_event;
 	cpu_pmu->num_events	= armv7_read_num_pmnc_events();
 	cpu_pmu->set_event_filter = armv7pmu_set_event_filter;
-	__v7_pmu_init_logical_state(cpu_pmu);
 	return 0;
 }
 #else

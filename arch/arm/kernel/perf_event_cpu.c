@@ -162,6 +162,9 @@ static void cpu_pmu_init(struct arm_pmu *pmu)
 		events->used_mask = cpu_pmu->used_mask;
 		raw_spin_lock_init(&events->pmu_lock);
 
+		if (pmu->cpu_init)
+			pmu->cpu_init(pmu, cpu_pmu);
+
 		cpu_pmu->valid = true;
 	}
 
@@ -352,7 +355,6 @@ static int cpu_pmu_device_probe(struct platform_device *pdev)
 			cpumask_copy(&sibling_mask, cpu_possible_mask);
 
 		smp_call_function_any(&sibling_mask, init_fn, pmu, 1);
-		pmu->cpu_pmus = cpu_pmus; /* clobbered by init_fn */
 
 		/* now set the valid_cpus after init */
 		cpumask_copy(&pmu->valid_cpus, &sibling_mask);

@@ -110,6 +110,7 @@ struct arm_pmu {
 	int		(*map_event)(struct perf_event *event);
 	void		(*save_regs)(struct arm_pmu *, struct cpupmu_regs *);
 	void		(*restore_regs)(struct arm_pmu *, struct cpupmu_regs *);
+	void		(*cpu_init)(struct arm_pmu *, struct arm_cpu_pmu *);
 	int		num_events;
 	atomic_t	active_events;
 	struct mutex	reserve_mutex;
