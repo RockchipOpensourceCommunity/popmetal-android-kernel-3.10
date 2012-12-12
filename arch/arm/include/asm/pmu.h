@@ -13,7 +13,9 @@
 #define __ARM_PMU_H__
 
 #include <linux/interrupt.h>
+#include <linux/percpu.h>
 #include <linux/perf_event.h>
+#include <linux/types.h>
 
 /*
  * struct arm_pmu_platdata - ARM PMU platform data
@@ -71,6 +73,18 @@ struct cpupmu_regs {
 	u32 pmxevtcnt[8];
 };
 
+struct arm_cpu_pmu {
+	bool			valid;
+
+	u32			midr_match;
+	u32			midr_mask;
+
+	struct perf_event	*hw_events[ARMPMU_MAX_HWEVENTS];
+	unsigned long		used_mask[BITS_TO_LONGS(ARMPMU_MAX_HWEVENTS)];
+	struct pmu_hw_events	cpu_hw_events;
+	struct cpupmu_regs	cpu_pmu_regs;
+};
+
 struct arm_pmu {
 	struct pmu	pmu;
 	cpumask_t	active_irqs;
@@ -98,10 +112,15 @@ struct arm_pmu {
 	struct mutex	reserve_mutex;
 	u64		max_period;
 	struct platform_device	*plat_device;
-	struct pmu_hw_events	*(*get_hw_events)(void);
+	struct pmu_hw_events	*(*get_hw_events)(struct arm_pmu *);
+
+	struct list_head	class_pmus_list;
+	struct arm_cpu_pmu __percpu *cpu_pmus;
 };
 
 #define to_arm_pmu(p) (container_of(p, struct arm_pmu, pmu))
+
+#define for_each_pmu(pmu, head) list_for_each_entry(pmu, head, class_pmus_list)
 
 extern const struct dev_pm_ops armpmu_dev_pm_ops;
 

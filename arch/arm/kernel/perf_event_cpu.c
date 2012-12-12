@@ -19,10 +19,13 @@
 #define pr_fmt(fmt) "CPU PMU: " fmt
 
 #include <linux/bitmap.h>
+#include <linux/cpumask.h>
 #include <linux/cpu_pm.h>
 #include <linux/export.h>
 #include <linux/kernel.h>
+#include <linux/list.h>
 #include <linux/of.h>
+#include <linux/percpu.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
@@ -31,14 +34,22 @@
 #include <asm/irq_regs.h>
 #include <asm/pmu.h>
 
-/* Set at runtime when we know what CPU type we are. */
-static DEFINE_PER_CPU(struct arm_pmu *, cpu_pmu);
+static LIST_HEAD(cpu_pmus_list);
 
-static DEFINE_PER_CPU(struct perf_event * [ARMPMU_MAX_HWEVENTS], hw_events);
-static DEFINE_PER_CPU(unsigned long [BITS_TO_LONGS(ARMPMU_MAX_HWEVENTS)], used_mask);
-static DEFINE_PER_CPU(struct pmu_hw_events, cpu_hw_events);
+#define cpu_for_each_pmu(pmu, cpu_pmu, cpu)				\
+	for_each_pmu(pmu, &cpu_pmus_list)				\
+		if (((cpu_pmu) = per_cpu_ptr((pmu)->cpu_pmus, cpu))->valid)
 
-static DEFINE_PER_CPU(struct cpupmu_regs, cpu_pmu_regs);
+static struct arm_pmu *__cpu_find_any_pmu(unsigned int cpu)
+{
+	struct arm_pmu *pmu;
+	struct arm_cpu_pmu *cpu_pmu;
+
+	cpu_for_each_pmu(pmu, cpu_pmu, cpu)
+		return pmu;
+
+	return NULL;
+}
 
 /*
  * Despite the names, these two functions are CPU-specific and are used
@@ -46,7 +57,7 @@ static DEFINE_PER_CPU(struct cpupmu_regs, cpu_pmu_regs);
  */
 const char *perf_pmu_name(void)
 {
-	struct arm_pmu *pmu = per_cpu(cpu_pmu, 0);
+	struct arm_pmu *pmu = __cpu_find_any_pmu(0);
 	if (!pmu)
 		return NULL;
 
@@ -56,7 +67,7 @@ EXPORT_SYMBOL_GPL(perf_pmu_name);
 
 int perf_num_counters(void)
 {
-	struct arm_pmu *pmu = per_cpu(cpu_pmu, 0);
+	struct arm_pmu *pmu = __cpu_find_any_pmu(0);
 
 	if (!pmu)
 		return 0;
@@ -70,9 +81,9 @@ EXPORT_SYMBOL_GPL(perf_num_counters);
 #include "perf_event_v6.c"
 #include "perf_event_v7.c"
 
-static struct pmu_hw_events *cpu_pmu_get_cpu_events(void)
+static struct pmu_hw_events *cpu_pmu_get_cpu_events(struct arm_pmu *pmu)
 {
-	return &__get_cpu_var(cpu_hw_events);
+	return &this_cpu_ptr(pmu->cpu_pmus)->cpu_hw_events;
 }
 
 static void cpu_pmu_free_irq(struct arm_pmu *cpu_pmu)
@@ -140,23 +151,27 @@ static int cpu_pmu_request_irq(struct arm_pmu *cpu_pmu, irq_handler_t handler)
 	return 0;
 }
 
-static void cpu_pmu_init(struct arm_pmu *cpu_pmu)
+static void cpu_pmu_init(struct arm_pmu *pmu)
 {
 	int cpu;
-	for_each_cpu_mask(cpu, cpu_pmu->valid_cpus) {
-		struct pmu_hw_events *events = &per_cpu(cpu_hw_events, cpu);
-		events->events = per_cpu(hw_events, cpu);
-		events->used_mask = per_cpu(used_mask, cpu);
+	for_each_cpu_mask(cpu, pmu->valid_cpus) {
+		struct arm_cpu_pmu *cpu_pmu = per_cpu_ptr(pmu->cpu_pmus, cpu);
+		struct pmu_hw_events *events = &cpu_pmu->cpu_hw_events;
+
+		events->events = cpu_pmu->hw_events;
+		events->used_mask = cpu_pmu->used_mask;
 		raw_spin_lock_init(&events->pmu_lock);
+
+		cpu_pmu->valid = true;
 	}
 
-	cpu_pmu->get_hw_events	= cpu_pmu_get_cpu_events;
-	cpu_pmu->request_irq	= cpu_pmu_request_irq;
-	cpu_pmu->free_irq	= cpu_pmu_free_irq;
+	pmu->get_hw_events	= cpu_pmu_get_cpu_events;
+	pmu->request_irq	= cpu_pmu_request_irq;
+	pmu->free_irq		= cpu_pmu_free_irq;
 
 	/* Ensure the PMU has sane values out of reset. */
-	if (cpu_pmu->reset)
-		on_each_cpu_mask(&cpu_pmu->valid_cpus, cpu_pmu->reset, cpu_pmu, 1);
+	if (pmu->reset)
+		on_each_cpu_mask(&pmu->valid_cpus, pmu->reset, pmu, 1);
 }
 
 /*
@@ -168,36 +183,42 @@ static void cpu_pmu_init(struct arm_pmu *cpu_pmu)
 static int __cpuinit cpu_pmu_notify(struct notifier_block *b,
 				    unsigned long action, void *hcpu)
 {
-	struct arm_pmu *pmu = per_cpu(cpu_pmu, (long)hcpu);
+	struct arm_pmu *pmu;
+	struct arm_cpu_pmu *cpu_pmu;
+	int ret = NOTIFY_DONE;
 
 	if ((action & ~CPU_TASKS_FROZEN) != CPU_STARTING)
 		return NOTIFY_DONE;
 
-	if (pmu && pmu->reset)
-		pmu->reset(pmu);
-	else
-		return NOTIFY_DONE;
+	cpu_for_each_pmu(pmu, cpu_pmu, (unsigned int)hcpu)
+		if (pmu->reset) {
+			pmu->reset(pmu);
+			ret = NOTIFY_OK;
+		}
 
-	return NOTIFY_OK;
+	return ret;
 }
 
 static int cpu_pmu_pm_notify(struct notifier_block *b,
 				    unsigned long action, void *hcpu)
 {
 	int cpu = smp_processor_id();
-	struct arm_pmu *pmu = per_cpu(cpu_pmu, cpu);
-	struct cpupmu_regs *pmuregs = &per_cpu(cpu_pmu_regs, cpu);
+	struct arm_pmu *pmu;
+	struct arm_cpu_pmu *cpu_pmu;
+	int ret = NOTIFY_DONE;
 
-	if (!pmu)
-		return NOTIFY_DONE;
+	cpu_for_each_pmu(pmu, cpu_pmu, cpu) {
+		struct cpupmu_regs *pmuregs = &cpu_pmu->cpu_pmu_regs;
 
-	if (action == CPU_PM_ENTER && pmu->save_regs) {
-		pmu->save_regs(pmu, pmuregs);
-	} else if (action == CPU_PM_EXIT && pmu->restore_regs) {
-		pmu->restore_regs(pmu, pmuregs);
+		if (action == CPU_PM_ENTER && pmu->save_regs)
+			pmu->save_regs(pmu, pmuregs);
+		else if (action == CPU_PM_EXIT && pmu->restore_regs)
+			pmu->restore_regs(pmu, pmuregs);
+
+		ret = NOTIFY_OK;
 	}
 
-	return NOTIFY_OK;
+	return ret;
 }
 
 static struct notifier_block __cpuinitdata cpu_pmu_hotplug_notifier = {
@@ -286,19 +307,30 @@ static int probe_current_pmu(struct arm_pmu *pmu)
 	return ret;
 }
 
+static void cpu_pmu_free(struct arm_pmu *pmu)
+{
+	if (!pmu)
+		return;
+
+	free_percpu(pmu->cpu_pmus);
+	kfree(pmu);
+}
+
 static int cpu_pmu_device_probe(struct platform_device *pdev)
 {
 	const struct of_device_id *of_id;
 	struct device_node *node = pdev->dev.of_node;
 	struct arm_pmu *pmu;
+	struct arm_cpu_pmu __percpu *cpu_pmus;
 	int ret = 0;
-	int cpu;
 
 	pmu = kzalloc(sizeof(struct arm_pmu), GFP_KERNEL);
-	if (!pmu) {
-		pr_info("failed to allocate PMU device!");
-		return -ENOMEM;
-	}
+	if (!pmu)
+		goto error_nomem;
+
+	pmu->cpu_pmus = cpu_pmus = alloc_percpu(struct arm_cpu_pmu);
+	if (!cpu_pmus)
+		goto error_nomem;
 
 	if (node && (of_id = of_match_node(cpu_pmu_of_device_ids, pdev->dev.of_node))) {
 		smp_call_func_t init_fn = (smp_call_func_t)of_id->data;
@@ -317,9 +349,10 @@ static int cpu_pmu_device_probe(struct platform_device *pdev)
 		/* set sibling mask to all cpu mask if socket is not specified */
 		if (cluster == -1 ||
 			cluster_to_logical_mask(cluster, &sibling_mask))
-			cpumask_setall(&sibling_mask);
+			cpumask_copy(&sibling_mask, cpu_possible_mask);
 
 		smp_call_function_any(&sibling_mask, init_fn, pmu, 1);
+		pmu->cpu_pmus = cpu_pmus; /* clobbered by init_fn */
 
 		/* now set the valid_cpus after init */
 		cpumask_copy(&pmu->valid_cpus, &sibling_mask);
@@ -327,24 +360,26 @@ static int cpu_pmu_device_probe(struct platform_device *pdev)
 		ret = probe_current_pmu(pmu);
 	}
 
-	if (ret) {
-		pr_info("failed to probe PMU!");
-		goto out_free;
-	}
-
-	for_each_cpu_mask(cpu, pmu->valid_cpus)
-		per_cpu(cpu_pmu, cpu) = pmu;
+	if (ret)
+		goto error;
 
 	pmu->plat_device = pdev;
 	cpu_pmu_init(pmu);
 	ret = armpmu_register(pmu, -1);
 
-	if (!ret)
-		return 0;
+	if (ret)
+		goto error;
 
-out_free:
-	pr_info("failed to register PMU devices!");
-	kfree(pmu);
+	list_add(&pmu->class_pmus_list, &cpu_pmus_list);
+	goto out;
+
+error_nomem:
+	pr_warn("out of memory\n");
+	ret = -ENOMEM;
+error:
+	pr_warn("failed to register PMU device(s)!\n");
+	cpu_pmu_free(pmu);
+out:
 	return ret;
 }
 
