@@ -150,23 +150,23 @@ __def_v7_pmu_reg(PMOVSSET,	RW, 0, c14, 3)
 		__v7_pmu_read_logical(cpupmu, name)	\
 )
 
-#define __v7_pmu_reg_set(cpupmu, name, mask) do {			\
+#define __v7_pmu_reg_set(cpupmu, name, logical_name, mask) do {		\
 	if ((cpupmu)->active)						\
 		__v7_pmu_write_physical(name, mask);			\
 	else {								\
 		u32 __value;						\
-		__value =__v7_pmu_read_logical(cpupmu, name) | (mask);	\
-		__v7_pmu_write_logical(cpupmu, name, __value);		\
+		__value =__v7_pmu_read_logical(cpupmu, logical_name) | (mask); \
+		__v7_pmu_write_logical(cpupmu, logical_name, __value); \
 	}								\
 } while(0)
 
-#define __v7_pmu_reg_clr(cpupmu, name, mask) do {			\
+#define __v7_pmu_reg_clr(cpupmu, name, logical_name, mask) do {		\
 	if ((cpupmu)->active)						\
 		__v7_pmu_write_physical(name, mask);			\
 	else {								\
 		u32 __value;						\
-		__value = __v7_pmu_read_logical(cpupmu, name) & ~(mask); \
-		__v7_pmu_write_logical(cpupmu, name, __value);		\
+		__value = __v7_pmu_read_logical(cpupmu, logical_name) & ~(mask); \
+		__v7_pmu_write_logical(cpupmu, logical_name, __value);	\
 	}								\
 } while(0)
 
@@ -1026,31 +1026,31 @@ static inline void armv7_pmnc_write_evtsel(struct arm_cpu_pmu *cpupmu, int idx, 
 static inline int armv7_pmnc_enable_counter(struct arm_cpu_pmu *cpupmu, int idx)
 {
 	u32 counter = ARMV7_IDX_TO_COUNTER(idx);
-	__v7_pmu_reg_set(cpupmu, PMCNTENSET, BIT(counter));
+	__v7_pmu_reg_set(cpupmu, PMCNTENSET, PMCNTENSET, BIT(counter));
 	return idx;
 }
 
 static inline int armv7_pmnc_disable_counter(struct arm_cpu_pmu *cpupmu, int idx)
 {
 	u32 counter = ARMV7_IDX_TO_COUNTER(idx);
-	__v7_pmu_reg_clr(cpupmu, PMCNTENCLR, BIT(counter));
+	__v7_pmu_reg_clr(cpupmu, PMCNTENCLR, PMCNTENSET, BIT(counter));
 	return idx;
 }
 
 static inline int armv7_pmnc_enable_intens(struct arm_cpu_pmu *cpupmu, int idx)
 {
 	u32 counter = ARMV7_IDX_TO_COUNTER(idx);
-	__v7_pmu_reg_set(cpupmu, PMINTENSET, BIT(counter));
+	__v7_pmu_reg_set(cpupmu, PMINTENSET, PMCNTENSET, BIT(counter));
 	return idx;
 }
 
 static inline int armv7_pmnc_disable_intens(struct arm_cpu_pmu *cpupmu, int idx)
 {
 	u32 counter = ARMV7_IDX_TO_COUNTER(idx);
-	__v7_pmu_reg_clr(cpupmu, PMINTENCLR, BIT(counter));
+	__v7_pmu_reg_clr(cpupmu, PMINTENCLR, PMINTENSET, BIT(counter));
 	isb();
 	/* Clear the overflow flag in case an interrupt is pending. */
-	__v7_pmu_reg_clr(cpupmu, PMOVSR, BIT(counter));
+	__v7_pmu_reg_clr(cpupmu, PMOVSR, PMOVSR, BIT(counter));
 	isb();
 
 	return idx;
@@ -1065,7 +1065,7 @@ static inline u32 armv7_pmnc_getreset_flags(struct arm_cpu_pmu *cpupmu)
 
 	/* Write to clear flags */
 	val &= ARMV7_FLAG_MASK;
-	__v7_pmu_reg_clr(cpupmu, PMOVSR, val);
+	__v7_pmu_reg_clr(cpupmu, PMOVSR, PMOVSR, val);
 
 	return val;
 }
