@@ -176,6 +176,16 @@ __def_v7_pmu_reg(PMOVSSET,	RW, 0, c14, 3)
 #define __v7_pmu_restore_reg(cpupmu, name)				\
 	__v7_pmu_write_physical(name,					\
 				__v7_pmu_read_logical(cpupmu, name))
+static u32 read_mpidr(void)
+{
+	u32 result;
+
+	asm volatile ("mrc p15, 0, %0, c0, c0, 5" : "=r" (result));
+
+	return result;
+}
+
+static void armv7pmu_reset(void *info);
 
 /*
  * Common ARMv7 event types
@@ -1133,6 +1143,8 @@ static void armv7pmu_restore_regs(struct arm_pmu *pmu,
 	u32 pmcr;
 	struct arm_cpu_pmu *cpupmu = to_this_cpu_pmu(pmu);
 
+	armv7pmu_reset(pmu);
+
 	if (!cpupmu->active)
 		return;
 
@@ -1245,7 +1257,12 @@ static irqreturn_t armv7pmu_handle_irq(int irq_num, void *dev)
 	struct pt_regs *regs;
 	int idx;
 
-	BUG_ON(!cpupmu->active);
+	if (!cpupmu->active) {
+		pr_warn_ratelimited("%s: Spurious interrupt for inactive PMU %s: event counts will be wrong.\n",
+			__func__, pmu->name);
+		pr_warn_once("This is a known interrupt affinity bug in the b.L switcher perf support.\n");
+		return IRQ_NONE;
+	}
 
 	/*
 	 * Get and reset the IRQ flags
@@ -1379,19 +1396,24 @@ static int armv7pmu_set_event_filter(struct hw_perf_event *event,
 	return 0;
 }
 
+static bool check_active(struct arm_cpu_pmu *cpupmu)
+{
+	u32 mpidr = read_mpidr();
+
+	BUG_ON(!(mpidr & 0x80000000)); /* this won't work on uniprocessor */
+
+	cpupmu->active = ((mpidr ^ cpupmu->mpidr) & 0xFFFFFF) == 0;
+	return cpupmu->active;
+}
+
 static void armv7pmu_reset(void *info)
 {
 	struct arm_pmu *pmu = (struct arm_pmu *)info;
 	struct arm_cpu_pmu *cpupmu = to_this_cpu_pmu(pmu);
 	u32 idx, nb_cnt = pmu->num_events;
-	bool active = cpupmu->active;
 
-	/*
-	 * The purpose of this function is to get the physical CPU into a
-	 * sane state, so make sure we're not operating on the logical CPU
-	 * instead:
-	 */
-	cpupmu->active = true;
+	if (!check_active(cpupmu))
+		return;
 
 	/* The counter and interrupt enable registers are unknown at reset. */
 	for (idx = ARMV7_IDX_CYCLE_COUNTER; idx < nb_cnt; ++idx) {
@@ -1401,8 +1423,6 @@ static void armv7pmu_reset(void *info)
 
 	/* Initialize & Reset PMNC: C and P bits */
 	armv7_pmnc_write(cpupmu, ARMV7_PMNC_P | ARMV7_PMNC_C);
-
-	cpupmu->active = active;
 }
 
 static int armv7_a8_map_event(struct perf_event *event)

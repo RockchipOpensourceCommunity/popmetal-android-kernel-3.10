@@ -77,8 +77,7 @@ struct arm_cpu_pmu {
 	bool			valid;
 	bool			active;
 
-	u32			midr_match;
-	u32			midr_mask;
+	u32			mpidr;
 
 	struct perf_event	*hw_events[ARMPMU_MAX_HWEVENTS];
 	unsigned long		used_mask[BITS_TO_LONGS(ARMPMU_MAX_HWEVENTS)];

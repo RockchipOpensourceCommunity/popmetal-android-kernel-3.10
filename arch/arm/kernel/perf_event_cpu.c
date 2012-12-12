@@ -30,9 +30,12 @@
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 
+#include <asm/bL_switcher.h>
 #include <asm/cputype.h>
 #include <asm/irq_regs.h>
 #include <asm/pmu.h>
+#include <asm/smp_plat.h>
+#include <asm/topology.h>
 
 static LIST_HEAD(cpu_pmus_list);
 
@@ -319,6 +322,33 @@ static void cpu_pmu_free(struct arm_pmu *pmu)
 	kfree(pmu);
 }
 
+/*
+ * HACK: Find a b.L switcher partner for CPU cpu on the specified cluster
+ * This information should be obtained from an interface provided by the
+ * Switcher itself, if possible.
+ */
+#ifdef CONFIG_BL_SWITCHER
+static int bL_get_partner(int cpu, int cluster)
+{
+	unsigned int i;
+
+
+	for (i = 0; i < NR_CPUS; i++) {
+		if (cpu_topology[i].thread_id == cpu_topology[cpu].thread_id &&
+		    cpu_topology[i].core_id == cpu_topology[cpu].core_id &&
+		    cpu_topology[i].socket_id == cluster)
+			return i;
+	}
+
+	return -1; /* no partner found */
+}
+#else
+static int bL_get_partner(int __always_unused cpu, int __always_unused cluster)
+{
+	return -1;
+}
+#endif
+
 static int cpu_pmu_device_probe(struct platform_device *pdev)
 {
 	const struct of_device_id *of_id;
@@ -340,6 +370,7 @@ static int cpu_pmu_device_probe(struct platform_device *pdev)
 		struct device_node *ncluster;
 		int cluster = -1;
 		cpumask_t sibling_mask;
+		unsigned int i;
 
 		ncluster = of_parse_phandle(node, "cluster", 0);
 		if (ncluster) {
@@ -350,11 +381,49 @@ static int cpu_pmu_device_probe(struct platform_device *pdev)
 				cluster = be32_to_cpup(hwid);
 		}
 		/* set sibling mask to all cpu mask if socket is not specified */
-		if (cluster == -1 ||
+		/*
+		 * In a switcher kernel, we affine all PMUs to CPUs and
+		 * abstract the runtime presence/absence of PMUs at a lower
+		 * level.
+		 */
+		if (cluster == -1 || IS_ENABLED(CONFIG_BL_SWITCHER) ||
 			cluster_to_logical_mask(cluster, &sibling_mask))
 			cpumask_copy(&sibling_mask, cpu_possible_mask);
 
+		if (bL_switcher_get_enabled())
+			/*
+			 * The switcher initialises late now, so it should not
+			 * have initialised yet:
+			 */
+			BUG();
+
+		/*
+		 * HACK: Deduce how the switcher will modify the topology
+		 * in order to fill in PMU<->CPU combinations which don't
+		 * make sense when the switcher is disabled.  Ideally, this
+		 * knowledge should come from the swithcer somehow.
+		 */
+		for (i = 0; i < NR_CPUS; i++) {
+			int cpu = i;
+
+			if (cpu_topology[i].socket_id != cluster) {
+				int partner = bL_get_partner(i, cluster);
+
+				if (partner != -1)
+					cpu = partner;
+			}
+
+			per_cpu_ptr(cpu_pmus, i)->mpidr =
+				cpu_logical_map(cpu);
+		}
+
+		/*
+		 * This relies on an MP view of the system to choose the right
+		 * CPU to run init_fn:
+		 */
 		smp_call_function_any(&sibling_mask, init_fn, pmu, 1);
+
+		bL_switcher_put_enabled();
 
 		/* now set the valid_cpus after init */
 		cpumask_copy(&pmu->valid_cpus, &sibling_mask);
