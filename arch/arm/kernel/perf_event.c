@@ -483,6 +483,10 @@ static void armpmu_enable(struct pmu *pmu)
 static void armpmu_disable(struct pmu *pmu)
 {
 	struct arm_pmu *armpmu = to_arm_pmu(pmu);
+
+	if (!cpumask_test_cpu(smp_processor_id(), &armpmu->valid_cpus))
+		return;
+
 	armpmu->stop(armpmu);
 }
 
