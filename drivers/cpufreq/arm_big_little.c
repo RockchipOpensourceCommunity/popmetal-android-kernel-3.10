@@ -435,14 +435,6 @@ static int bL_cpufreq_init(struct cpufreq_policy *policy)
 	return 0;
 }
 
-static int bL_cpufreq_exit(struct cpufreq_policy *policy)
-{
-	put_cluster_clk_and_freq_table(cpu_to_cluster(policy->cpu));
-	pr_debug("%s: Exited, cpu: %d\n", __func__, policy->cpu);
-
-	return 0;
-}
-
 /* Export freq_table to sysfs */
 static struct freq_attr *bL_cpufreq_attr[] = {
 	&cpufreq_freq_attr_scaling_available_freqs,
@@ -456,7 +448,6 @@ static struct cpufreq_driver bL_cpufreq_driver = {
 	.target	= bL_cpufreq_set_target,
 	.get	= bL_cpufreq_get_rate,
 	.init	= bL_cpufreq_init,
-	.exit	= bL_cpufreq_exit,
 	.attr	= bL_cpufreq_attr,
 };
 
@@ -546,6 +537,17 @@ void bL_cpufreq_unregister(struct cpufreq_arm_bL_ops *ops)
 	bL_switcher_put_enabled();
 	pr_info("%s: Un-registered platform driver: %s\n", __func__,
 			arm_bL_ops->name);
+
+	/* For saving table get/put on every cpu in/out */
+	if (is_bL_switching_enabled()) {
+		put_cluster_clk_and_freq_table(MAX_CLUSTERS);
+	} else {
+		int i;
+
+		for (i = 0; i < MAX_CLUSTERS; i++)
+			return put_cluster_clk_and_freq_table(i);
+	}
+
 	arm_bL_ops = NULL;
 }
 EXPORT_SYMBOL_GPL(bL_cpufreq_unregister);
