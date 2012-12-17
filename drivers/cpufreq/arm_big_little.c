@@ -113,20 +113,20 @@ static unsigned int bL_cpufreq_get_rate(unsigned int cpu)
 static unsigned int
 bL_cpufreq_set_rate(u32 cpu, u32 old_cluster, u32 new_cluster, u32 rate)
 {
-	u32 max_rate, actual_rate;
+	u32 new_rate;
 	int ret;
 
 	if (is_bL_switching_enabled()) {
-		max_rate = find_cluster_maxfreq(cpu, new_cluster, rate);
-		actual_rate = ACTUAL_FREQ(new_cluster, max_rate);
+		new_rate = find_cluster_maxfreq(cpu, new_cluster, rate);
+		new_rate = ACTUAL_FREQ(new_cluster, new_rate);
 	} else {
-		actual_rate = max_rate = rate;
+		new_rate = rate;
 	}
 
 	pr_debug("%s: cpu: %d, old cluster: %d, new cluster: %d, freq: %d\n",
-			__func__, cpu, old_cluster, new_cluster, actual_rate);
+			__func__, cpu, old_cluster, new_cluster, new_rate);
 
-	ret = clk_set_rate(clk[new_cluster], actual_rate * 1000);
+	ret = clk_set_rate(clk[new_cluster], new_rate * 1000);
 	if (ret) {
 		pr_err("clk_set_rate failed: %d, new cluster: %d\n", ret,
 				new_cluster);
@@ -135,15 +135,15 @@ bL_cpufreq_set_rate(u32 cpu, u32 old_cluster, u32 new_cluster, u32 rate)
 
 	/* Recalc freq for old cluster when switching clusters */
 	if (old_cluster != new_cluster) {
-		max_rate = find_cluster_maxfreq(cpu, old_cluster, 0);
-		max_rate = ACTUAL_FREQ(old_cluster, max_rate);
+		new_rate = find_cluster_maxfreq(cpu, old_cluster, 0);
+		new_rate = ACTUAL_FREQ(old_cluster, new_rate);
 
 		/* Set freq of old cluster if there are cpus left on it */
-		if (max_rate) {
+		if (new_rate) {
 			pr_debug("%s: Updating rate of old cluster: %d, to freq: %d\n",
-					__func__, old_cluster, max_rate);
+					__func__, old_cluster, new_rate);
 
-			if (clk_set_rate(clk[old_cluster], max_rate * 1000))
+			if (clk_set_rate(clk[old_cluster], new_rate * 1000))
 				pr_err("%s: clk_set_rate failed: %d, old cluster: %d\n",
 						__func__, ret, old_cluster);
 		}
