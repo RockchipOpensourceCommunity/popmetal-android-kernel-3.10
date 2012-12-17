@@ -110,25 +110,43 @@ static unsigned int bL_cpufreq_get_rate(unsigned int cpu)
 	return per_cpu(cpu_last_req_freq, cpu);
 }
 
-static unsigned int bL_cpufreq_set_rate(u32 cpu, u32 cluster, u32 rate)
+static unsigned int
+bL_cpufreq_set_rate(u32 cpu, u32 old_cluster, u32 new_cluster, u32 rate)
 {
 	u32 max_rate, actual_rate;
 	int ret;
 
 	if (is_bL_switching_enabled()) {
-		max_rate = find_cluster_maxfreq(cpu, cluster, rate);
-		actual_rate = ACTUAL_FREQ(cluster, max_rate);
+		max_rate = find_cluster_maxfreq(cpu, new_cluster, rate);
+		actual_rate = ACTUAL_FREQ(new_cluster, max_rate);
 	} else {
 		actual_rate = max_rate = rate;
 	}
 
-	pr_debug("%s: cpu: %d, cluster: %d, freq: %d\n", __func__, cpu, cluster,
-			actual_rate);
+	pr_debug("%s: cpu: %d, old cluster: %d, new cluster: %d, freq: %d\n",
+			__func__, cpu, old_cluster, new_cluster, actual_rate);
 
-	ret = clk_set_rate(clk[cluster], actual_rate * 1000);
+	ret = clk_set_rate(clk[new_cluster], actual_rate * 1000);
 	if (ret) {
-		pr_err("clk_set_rate failed: %d\n", ret);
+		pr_err("clk_set_rate failed: %d, new cluster: %d\n", ret,
+				new_cluster);
 		return ret;
+	}
+
+	/* Recalc freq for old cluster when switching clusters */
+	if (old_cluster != new_cluster) {
+		max_rate = find_cluster_maxfreq(cpu, old_cluster, 0);
+		max_rate = ACTUAL_FREQ(old_cluster, max_rate);
+
+		/* Set freq of old cluster if there are cpus left on it */
+		if (max_rate) {
+			pr_debug("%s: Updating rate of old cluster: %d, to freq: %d\n",
+					__func__, old_cluster, max_rate);
+
+			if (clk_set_rate(clk[old_cluster], max_rate * 1000))
+				pr_err("%s: clk_set_rate failed: %d, old cluster: %d\n",
+						__func__, ret, old_cluster);
+		}
 	}
 
 	per_cpu(cpu_last_req_freq, cpu) = rate;
@@ -185,7 +203,7 @@ static int bL_cpufreq_set_target(struct cpufreq_policy *policy,
 	for_each_cpu(freqs.cpu, policy->cpus)
 		cpufreq_notify_transition(&freqs, CPUFREQ_PRECHANGE);
 
-	ret = bL_cpufreq_set_rate(cpu, new_cluster, freqs.new);
+	ret = bL_cpufreq_set_rate(cpu, actual_cluster, new_cluster, freqs.new);
 	if (ret)
 		return ret;
 
