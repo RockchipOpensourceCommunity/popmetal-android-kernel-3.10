@@ -69,23 +69,23 @@ static int cpu_to_cluster(int cpu)
 		topology_physical_package_id(cpu);
 }
 
-static unsigned int find_cluster_maxfreq(int cpu, int cluster, unsigned int new)
+static unsigned int find_cluster_maxfreq(int cluster)
 {
 	int j;
+	u32 max_freq = 0, cpu_freq;
 
 	for_each_online_cpu(j) {
-		unsigned int temp = per_cpu(cpu_last_req_freq, j);
+		cpu_freq = per_cpu(cpu_last_req_freq, j);
 
-		if (cpu == j)
-			continue;
-		if (cluster == per_cpu(physical_cluster, j) &&
-			new < temp)
-			new = temp;
+		if ((cluster == per_cpu(physical_cluster, j)) &&
+				(max_freq < cpu_freq))
+			max_freq = cpu_freq;
 	}
 
-	pr_debug("%s: cluster: %d, max freq: %d\n", __func__, cluster, new);
+	pr_debug("%s: cluster: %d, max freq: %d\n", __func__, cluster,
+			max_freq);
 
-	return new;
+	return max_freq;
 }
 
 static unsigned int clk_get_cpu_rate(unsigned int cpu)
@@ -113,11 +113,15 @@ static unsigned int bL_cpufreq_get_rate(unsigned int cpu)
 static unsigned int
 bL_cpufreq_set_rate(u32 cpu, u32 old_cluster, u32 new_cluster, u32 rate)
 {
-	u32 new_rate;
+	u32 new_rate, prev_rate;
 	int ret;
 
+	prev_rate = per_cpu(cpu_last_req_freq, cpu);
+	per_cpu(cpu_last_req_freq, cpu) = rate;
+	per_cpu(physical_cluster, cpu) = new_cluster;
+
 	if (is_bL_switching_enabled()) {
-		new_rate = find_cluster_maxfreq(cpu, new_cluster, rate);
+		new_rate = find_cluster_maxfreq(new_cluster);
 		new_rate = ACTUAL_FREQ(new_cluster, new_rate);
 	} else {
 		new_rate = rate;
@@ -130,15 +134,23 @@ bL_cpufreq_set_rate(u32 cpu, u32 old_cluster, u32 new_cluster, u32 rate)
 	if (ret) {
 		pr_err("clk_set_rate failed: %d, new cluster: %d\n", ret,
 				new_cluster);
+		per_cpu(cpu_last_req_freq, cpu) = prev_rate;
+		per_cpu(physical_cluster, cpu) = old_cluster;
 		return ret;
 	}
 
 	/* Recalc freq for old cluster when switching clusters */
 	if (old_cluster != new_cluster) {
-		new_rate = find_cluster_maxfreq(cpu, old_cluster, 0);
-		new_rate = ACTUAL_FREQ(old_cluster, new_rate);
+		pr_debug("%s: cpu: %d, old cluster: %d, new cluster: %d\n",
+				__func__, cpu, old_cluster, new_cluster);
+
+		/* Switch cluster */
+		bL_switch_request(cpu, new_cluster);
 
 		/* Set freq of old cluster if there are cpus left on it */
+		new_rate = find_cluster_maxfreq(old_cluster);
+		new_rate = ACTUAL_FREQ(old_cluster, new_rate);
+
 		if (new_rate) {
 			pr_debug("%s: Updating rate of old cluster: %d, to freq: %d\n",
 					__func__, old_cluster, new_rate);
@@ -149,7 +161,6 @@ bL_cpufreq_set_rate(u32 cpu, u32 old_cluster, u32 new_cluster, u32 rate)
 		}
 	}
 
-	per_cpu(cpu_last_req_freq, cpu) = rate;
 	return 0;
 }
 
@@ -206,14 +217,6 @@ static int bL_cpufreq_set_target(struct cpufreq_policy *policy,
 	ret = bL_cpufreq_set_rate(cpu, actual_cluster, new_cluster, freqs.new);
 	if (ret)
 		return ret;
-
-	if (new_cluster != actual_cluster) {
-		pr_debug("%s: old cluster: %d, new cluster: %d\n", __func__,
-				actual_cluster, new_cluster);
-
-		bL_switch_request(cpu, new_cluster);
-		per_cpu(physical_cluster, cpu) = new_cluster;
-	}
 
 	policy->cur = freqs.new;
 
