@@ -23,6 +23,7 @@
 #include <linux/cpufreq.h>
 #include <linux/cpumask.h>
 #include <linux/export.h>
+#include <linux/mutex.h>
 #include <linux/of_platform.h>
 #include <linux/slab.h>
 #include <linux/types.h>
@@ -57,6 +58,8 @@ static unsigned int clk_little_max;	/* Maximum clock frequency (Little) */
 
 static DEFINE_PER_CPU(unsigned int, physical_cluster);
 static DEFINE_PER_CPU(unsigned int, cpu_last_req_freq);
+
+static struct mutex cluster_lock[MAX_CLUSTERS];
 
 /*
  * Functions to get the current status.
@@ -116,6 +119,8 @@ bL_cpufreq_set_rate(u32 cpu, u32 old_cluster, u32 new_cluster, u32 rate)
 	u32 new_rate, prev_rate;
 	int ret;
 
+	mutex_lock(&cluster_lock[new_cluster]);
+
 	prev_rate = per_cpu(cpu_last_req_freq, cpu);
 	per_cpu(cpu_last_req_freq, cpu) = rate;
 	per_cpu(physical_cluster, cpu) = new_cluster;
@@ -131,13 +136,18 @@ bL_cpufreq_set_rate(u32 cpu, u32 old_cluster, u32 new_cluster, u32 rate)
 			__func__, cpu, old_cluster, new_cluster, new_rate);
 
 	ret = clk_set_rate(clk[new_cluster], new_rate * 1000);
-	if (ret) {
+	if (WARN_ON(ret)) {
 		pr_err("clk_set_rate failed: %d, new cluster: %d\n", ret,
 				new_cluster);
 		per_cpu(cpu_last_req_freq, cpu) = prev_rate;
 		per_cpu(physical_cluster, cpu) = old_cluster;
+
+		mutex_unlock(&cluster_lock[new_cluster]);
+
 		return ret;
 	}
+
+	mutex_unlock(&cluster_lock[new_cluster]);
 
 	/* Recalc freq for old cluster when switching clusters */
 	if (old_cluster != new_cluster) {
@@ -146,6 +156,8 @@ bL_cpufreq_set_rate(u32 cpu, u32 old_cluster, u32 new_cluster, u32 rate)
 
 		/* Switch cluster */
 		bL_switch_request(cpu, new_cluster);
+
+		mutex_lock(&cluster_lock[old_cluster]);
 
 		/* Set freq of old cluster if there are cpus left on it */
 		new_rate = find_cluster_maxfreq(old_cluster);
@@ -159,6 +171,7 @@ bL_cpufreq_set_rate(u32 cpu, u32 old_cluster, u32 new_cluster, u32 rate)
 				pr_err("%s: clk_set_rate failed: %d, old cluster: %d\n",
 						__func__, ret, old_cluster);
 		}
+		mutex_unlock(&cluster_lock[old_cluster]);
 	}
 
 	return 0;
@@ -506,7 +519,7 @@ static struct notifier_block bL_switcher_notifier = {
 
 int bL_cpufreq_register(struct cpufreq_arm_bL_ops *ops)
 {
-	int ret;
+	int ret, i;
 
 	if (arm_bL_ops) {
 		pr_debug("%s: Already registered: %s, exiting\n", __func__,
@@ -523,6 +536,9 @@ int bL_cpufreq_register(struct cpufreq_arm_bL_ops *ops)
 
 	ret = bL_switcher_get_enabled();
 	set_switching_enabled(ret);
+
+	for (i = 0; i < MAX_CLUSTERS; i++)
+		mutex_init(&cluster_lock[i]);
 
 	ret = cpufreq_register_driver(&bL_cpufreq_driver);
 	if (ret) {
