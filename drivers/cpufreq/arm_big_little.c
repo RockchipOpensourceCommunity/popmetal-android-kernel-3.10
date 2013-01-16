@@ -44,8 +44,8 @@ static bool bL_switching_enabled;
 #define A7_CLUSTER	1
 #define MAX_CLUSTERS	2
 
-#define ACTUAL_FREQ(cluster, freq)	((cluster == A15_CLUSTER) ? freq >> 1 : freq)
-#define VIRT_FREQ(cluster, freq)	((cluster == A15_CLUSTER) ? freq << 1 : freq)
+#define ACTUAL_FREQ(cluster, freq)	((cluster == A7_CLUSTER) ? freq << 1 : freq)
+#define VIRT_FREQ(cluster, freq)	((cluster == A7_CLUSTER) ? freq >> 1 : freq)
 
 static struct cpufreq_arm_bL_ops *arm_bL_ops;
 static struct clk *clk[MAX_CLUSTERS];
@@ -411,8 +411,8 @@ static int get_cluster_clk_and_freq_table(u32 cluster)
 		goto put_clusters;
 
 	/* Assuming 2 cluster, set clk_big_min and clk_little_max */
-	clk_big_min = VIRT_FREQ(0, get_table_min(freq_table[0]));
-	clk_little_max = get_table_max(freq_table[1]);
+	clk_big_min = get_table_min(freq_table[0]);
+	clk_little_max = VIRT_FREQ(1, get_table_max(freq_table[1]));
 
 	pr_debug("%s: cluster: %d, clk_big_min: %d, clk_little_max: %d\n",
 			__func__, cluster, clk_big_min, clk_little_max);
