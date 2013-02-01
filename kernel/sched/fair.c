@@ -4415,7 +4415,7 @@ static inline void update_sg_lb_stats(struct lb_env *env,
 {
 	unsigned long nr_running, max_nr_running, min_nr_running;
 	unsigned long load, max_cpu_load, min_cpu_load;
-	unsigned int balance_cpu = -1, first_idle_cpu = 0;
+	unsigned int balance_cpu = -1, first_idle_cpu = 0, overloaded_cpu = 0;
 	unsigned long avg_load_per_task = 0;
 	int i;
 
@@ -4453,6 +4453,11 @@ static inline void update_sg_lb_stats(struct lb_env *env,
 				max_nr_running = nr_running;
 			if (min_nr_running > nr_running)
 				min_nr_running = nr_running;
+
+			if ((load > rq->cpu_power)
+			 && ((rq->cpu_power*env->sd->imbalance_pct) < (env->dst_rq->cpu_power*100))
+			 && (load > target_load(env->dst_cpu, load_idx)))
+				overloaded_cpu = 1;
 		}
 
 		sgs->group_load += load;
@@ -4496,6 +4501,13 @@ static inline void update_sg_lb_stats(struct lb_env *env,
 
 	if ((max_cpu_load - min_cpu_load) >= avg_load_per_task &&
 	    (max_nr_running - min_nr_running) > 1)
+		sgs->group_imb = 1;
+
+	/*
+	 * The load contrib of a CPU exceeds its capacity, we should try to
+	 * find a better CPU with more capacity
+	 */
+	if (overloaded_cpu)
 		sgs->group_imb = 1;
 
 	sgs->group_capacity = DIV_ROUND_CLOSEST(group->sgp->power,
@@ -4911,6 +4923,7 @@ static struct rq *find_busiest_queue(struct lb_env *env,
 				     struct sched_group *group)
 {
 	struct rq *busiest = NULL, *rq;
+	struct rq *overloaded = NULL, *dst_rq = cpu_rq(env->dst_cpu);
 	unsigned long max_load = 0;
 	int i;
 
@@ -4928,6 +4941,17 @@ static struct rq *find_busiest_queue(struct lb_env *env,
 
 		rq = cpu_rq(i);
 		wl = weighted_cpuload(i);
+
+		/*
+		 * If the task requires more power than the current CPU
+		 * capacity and the dst_cpu has more capacity, keep the
+		 * dst_cpu in mind
+		 */
+		if ((rq->nr_running == 1)
+		 && (rq->cfs.runnable_load_avg > rq->cpu_power)
+		 && (rq->cfs.runnable_load_avg > dst_rq->cfs.runnable_load_avg)
+		 && ((rq->cpu_power*env->sd->imbalance_pct) < (dst_rq->cpu_power*100)))
+			overloaded = rq;
 
 		/*
 		 * When comparing with imbalance, use weighted_cpuload()
@@ -4949,6 +4973,9 @@ static struct rq *find_busiest_queue(struct lb_env *env,
 			busiest = rq;
 		}
 	}
+
+	if (!busiest)
+		busiest = overloaded;
 
 	return busiest;
 }
@@ -4976,6 +5003,9 @@ static int need_active_balance(struct lb_env *env)
 		if ((sd->flags & SD_ASYM_PACKING) && env->src_cpu > env->dst_cpu)
 			return 1;
 	}
+
+	if ((power_of(env->src_cpu)*sd->imbalance_pct) < (power_of(env->dst_cpu)*100))
+		return 1;
 
 	return unlikely(sd->nr_balance_failed > sd->cache_nice_tries+2);
 }
@@ -5619,6 +5649,10 @@ static inline int nohz_kick_needed(struct rq *rq, int cpu)
 		return 0;
 
 	if (rq->nr_running >= 2)
+		goto need_kick;
+
+	/* load contrib is higher than cpu capacity */
+	if (rq->cfs.runnable_load_avg > rq->cpu_power)
 		goto need_kick;
 
 	rcu_read_lock();
