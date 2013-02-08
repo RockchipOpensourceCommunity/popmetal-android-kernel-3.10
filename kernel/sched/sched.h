@@ -879,10 +879,15 @@ extern const struct sched_class idle_sched_class;
 
 extern void trigger_load_balance(struct rq *rq, int cpu);
 extern void idle_balance(int this_cpu, struct rq *this_rq);
+extern void idle_exit(int this_cpu, struct rq *this_rq);
 
 #else	/* CONFIG_SMP */
 
 static inline void idle_balance(int cpu, struct rq *rq)
+{
+}
+
+static inline void idle_exit(int this_cpu, struct rq *this_rq)
 {
 }
 
