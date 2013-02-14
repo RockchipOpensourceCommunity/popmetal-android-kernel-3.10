@@ -78,6 +78,7 @@ struct arm_cpu_pmu {
 	bool			active;
 
 	u32			mpidr;
+	int			irq;
 
 	struct perf_event	*hw_events[ARMPMU_MAX_HWEVENTS];
 	unsigned long		used_mask[BITS_TO_LONGS(ARMPMU_MAX_HWEVENTS)];

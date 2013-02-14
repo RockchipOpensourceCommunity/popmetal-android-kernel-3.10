@@ -89,44 +89,63 @@ static struct pmu_hw_events *cpu_pmu_get_cpu_events(struct arm_pmu *pmu)
 	return &this_cpu_ptr(pmu->cpu_pmus)->cpu_hw_events;
 }
 
-static void cpu_pmu_free_irq(struct arm_pmu *cpu_pmu)
+static int find_logical_cpu(u32 mpidr)
 {
-	int i, irq, irqs;
-	struct platform_device *pmu_device = cpu_pmu->plat_device;
-	int cpu = -1;
+	int cpu = bL_switcher_get_logical_index(mpidr);
 
-	irqs = min(pmu_device->num_resources, num_possible_cpus());
+	if (cpu != -EUNATCH)
+		return cpu;
 
-	for (i = 0; i < irqs; ++i) {
-		cpu = cpumask_next(cpu, &cpu_pmu->valid_cpus);
-		if (!cpumask_test_and_clear_cpu(cpu, &cpu_pmu->active_irqs))
+	return get_logical_index(mpidr);
+}
+
+static void cpu_pmu_free_irq(struct arm_pmu *pmu)
+{
+	int i;
+	int cpu;
+	struct arm_cpu_pmu *cpu_pmu;
+
+	for (i = 0; i < NR_CPUS; ++i) {
+		if (!(cpu_pmu = per_cpu_ptr(pmu->cpu_pmus, i)))
 			continue;
-		irq = platform_get_irq(pmu_device, i);
-		if (irq >= 0)
-			free_irq(irq, cpu_pmu);
+
+		cpu = find_logical_cpu(cpu_pmu->mpidr);
+		if (cpu < 0)
+			continue;
+
+		if (!cpumask_test_and_clear_cpu(cpu, &pmu->active_irqs))
+			continue;
+		if (cpu_pmu->irq >= 0)
+			free_irq(cpu_pmu->irq, pmu);
 	}
 }
 
-static int cpu_pmu_request_irq(struct arm_pmu *cpu_pmu, irq_handler_t handler)
+static int cpu_pmu_request_irq(struct arm_pmu *pmu, irq_handler_t handler)
 {
 	int i, err, irq, irqs;
-	struct platform_device *pmu_device = cpu_pmu->plat_device;
-	int cpu = -1;
+	int cpu;
+	struct arm_cpu_pmu *cpu_pmu;
 
-	if (!pmu_device)
-		return -ENODEV;
+	irqs = 0;
+	for (i = 0; i < NR_CPUS; i++)
+		if (per_cpu_ptr(pmu->cpu_pmus, i))
+			++irqs;
 
-	irqs = min(pmu_device->num_resources, num_possible_cpus());
 	if (irqs < 1) {
 		pr_err("no irqs for PMUs defined\n");
 		return -ENODEV;
 	}
 
-	for (i = 0; i < irqs; ++i) {
-		err = 0;
-		cpu = cpumask_next(cpu, &cpu_pmu->valid_cpus);
-		irq = platform_get_irq(pmu_device, i);
+	for (i = 0; i < NR_CPUS; i++) {
+		if (!(cpu_pmu = per_cpu_ptr(pmu->cpu_pmus, i)))
+			continue;
+
+		irq = cpu_pmu->irq;
 		if (irq < 0)
+			continue;
+
+		cpu = find_logical_cpu(cpu_pmu->mpidr);
+		if (cpu < 0 || cpu != i)
 			continue;
 
 		/*
@@ -136,19 +155,22 @@ static int cpu_pmu_request_irq(struct arm_pmu *cpu_pmu, irq_handler_t handler)
 		 */
 		if (irq_set_affinity(irq, cpumask_of(cpu)) && irqs > 1) {
 			pr_warning("unable to set irq affinity (irq=%d, cpu=%u)\n",
-				    irq, i);
+				    irq, cpu);
 			continue;
 		}
 
+		pr_debug("%s: requesting IRQ %d for CPU%d\n",
+			 pmu->name, irq, cpu);
+
 		err = request_irq(irq, handler, IRQF_NOBALANCING, "arm-pmu",
-				  cpu_pmu);
+				  pmu);
 		if (err) {
 			pr_err("unable to request IRQ%d for ARM PMU counters\n",
 				irq);
 			return err;
 		}
 
-		cpumask_set_cpu(cpu, &cpu_pmu->active_irqs);
+		cpumask_set_cpu(cpu, &pmu->active_irqs);
 	}
 
 	return 0;
@@ -349,6 +371,41 @@ static int bL_get_partner(int __always_unused cpu, int __always_unused cluster)
 }
 #endif
 
+static int find_irq(struct platform_device *pdev,
+		    struct device_node *pmu_node,
+		    struct device_node *cluster_node,
+		    u32 mpidr)
+{
+	int irq = -1;
+	u32 cluster;
+	u32 core;
+	struct device_node *cores_node;
+	struct device_node *core_node = NULL;
+
+	if (of_property_read_u32(cluster_node, "reg", &cluster) ||
+	    cluster != MPIDR_AFFINITY_LEVEL(mpidr, 1))
+		goto error;
+
+	cores_node = of_get_child_by_name(cluster_node, "cores");
+	if (!cores_node)
+		goto error;
+
+	for_each_child_of_node(cores_node, core_node)
+		if (!of_property_read_u32(core_node, "reg", &core) &&
+		    core == MPIDR_AFFINITY_LEVEL(mpidr, 0))
+			break;
+
+	if (!core_node)
+		goto error;
+
+	irq = platform_get_irq(pdev, core);
+
+error:
+	of_node_put(core_node);
+	of_node_put(cores_node);
+	return irq;
+}
+
 static int cpu_pmu_device_probe(struct platform_device *pdev)
 {
 	const struct of_device_id *of_id;
@@ -370,6 +427,7 @@ static int cpu_pmu_device_probe(struct platform_device *pdev)
 		struct device_node *ncluster;
 		int cluster = -1;
 		cpumask_t sibling_mask;
+		cpumask_t phys_sibling_mask;
 		unsigned int i;
 
 		ncluster = of_parse_phandle(node, "cluster", 0);
@@ -397,6 +455,8 @@ static int cpu_pmu_device_probe(struct platform_device *pdev)
 			 */
 			BUG();
 
+		cpumask_copy(&phys_sibling_mask, cpu_possible_mask);
+
 		/*
 		 * HACK: Deduce how the switcher will modify the topology
 		 * in order to fill in PMU<->CPU combinations which don't
@@ -406,22 +466,30 @@ static int cpu_pmu_device_probe(struct platform_device *pdev)
 		for (i = 0; i < NR_CPUS; i++) {
 			int cpu = i;
 
-			if (cpu_topology[i].socket_id != cluster) {
-				int partner = bL_get_partner(i, cluster);
+			per_cpu_ptr(cpu_pmus, i)->mpidr = -1;
+			per_cpu_ptr(cpu_pmus, i)->irq = -1;
 
-				if (partner != -1)
-					cpu = partner;
+			if (cpu_topology[i].socket_id != cluster) {
+				cpumask_clear_cpu(i, &phys_sibling_mask);
+				cpu = bL_get_partner(i, cluster);
 			}
 
-			per_cpu_ptr(cpu_pmus, i)->mpidr =
-				cpu_logical_map(cpu);
+			if (cpu == -1)
+				cpumask_clear_cpu(i, &sibling_mask);
+			else {
+				int irq = find_irq(pdev, node, ncluster,
+						   cpu_logical_map(cpu));
+				per_cpu_ptr(cpu_pmus, i)->mpidr =
+					cpu_logical_map(cpu);
+				per_cpu_ptr(cpu_pmus, i)->irq = irq;
+			}
 		}
 
 		/*
 		 * This relies on an MP view of the system to choose the right
 		 * CPU to run init_fn:
 		 */
-		smp_call_function_any(&sibling_mask, init_fn, pmu, 1);
+		smp_call_function_any(&phys_sibling_mask, init_fn, pmu, 1);
 
 		bL_switcher_put_enabled();
 
