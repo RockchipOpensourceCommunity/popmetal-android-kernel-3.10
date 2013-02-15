@@ -1117,6 +1117,9 @@ static void armv7pmu_save_regs(struct arm_pmu *pmu,
 	if (!cpupmu->active)
 		return;
 
+	if (!*cpupmu->cpu_hw_events.used_mask)
+		return;
+
 	if (!__v7_pmu_save_reg(cpupmu, PMCR) & ARMV7_PMNC_E)
 		return;
 
@@ -1146,6 +1149,9 @@ static void armv7pmu_restore_regs(struct arm_pmu *pmu,
 	armv7pmu_reset(pmu);
 
 	if (!cpupmu->active)
+		return;
+
+	if (!*cpupmu->cpu_hw_events.used_mask)
 		return;
 
 	pmcr = __v7_pmu_read_logical(cpupmu, PMCR);
