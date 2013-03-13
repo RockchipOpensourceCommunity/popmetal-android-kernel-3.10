@@ -4007,7 +4007,7 @@ static int move_tasks(struct lb_env *env)
 
 		load = task_h_load(p);
 
-		if (sched_feat(LB_MIN) && load < 16 && !env->sd->nr_balance_failed)
+		if (sched_feat(LB_MIN) && load < 204 && !env->sd->nr_balance_failed)
 			goto next;
 
 		if ((load / 2) > env->imbalance)
