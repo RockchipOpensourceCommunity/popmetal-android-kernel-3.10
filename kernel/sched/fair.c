@@ -5392,31 +5392,39 @@ static inline void nohz_balance_exit_idle(int cpu)
 
 static inline void set_cpu_sd_state_busy(void)
 {
+	struct sched_domain_rq *sd_rq;
 	struct sched_domain *sd;
 	int cpu = smp_processor_id();
 
-	if (!test_bit(NOHZ_IDLE, nohz_flags(cpu)))
-		return;
-	clear_bit(NOHZ_IDLE, nohz_flags(cpu));
-
 	rcu_read_lock();
-	for_each_domain(cpu, sd)
+	sd_rq = get_sched_domain_rq(cpu);
+
+	if (!sd_rq || !test_bit(NOHZ_IDLE, sched_rq_flags(sd_rq)))
+		goto unlock;
+	clear_bit(NOHZ_IDLE, sched_rq_flags(sd_rq));
+
+	for_each_domain_from_rq(sd_rq, sd)
 		atomic_inc(&sd->groups->sgp->nr_busy_cpus);
+unlock:
 	rcu_read_unlock();
 }
 
 void set_cpu_sd_state_idle(void)
 {
+	struct sched_domain_rq *sd_rq;
 	struct sched_domain *sd;
 	int cpu = smp_processor_id();
 
-	if (test_bit(NOHZ_IDLE, nohz_flags(cpu)))
-		return;
-	set_bit(NOHZ_IDLE, nohz_flags(cpu));
-
 	rcu_read_lock();
-	for_each_domain(cpu, sd)
+	sd_rq = get_sched_domain_rq(cpu);
+
+	if (!sd_rq || test_bit(NOHZ_IDLE, sched_rq_flags(sd_rq)))
+		goto unlock;
+	set_bit(NOHZ_IDLE, sched_rq_flags(sd_rq));
+
+	for_each_domain_from_rq(sd_rq, sd)
 		atomic_dec(&sd->groups->sgp->nr_busy_cpus);
+unlock:
 	rcu_read_unlock();
 }
 
@@ -5673,7 +5681,12 @@ static void run_rebalance_domains(struct softirq_action *h)
 
 static inline int on_null_domain(int cpu)
 {
-	return !rcu_dereference_sched(cpu_rq(cpu)->sd);
+	struct sched_domain_rq *sd_rq =
+		rcu_dereference_sched(cpu_rq(cpu)->sd_rq);
+	struct sched_domain *sd = NULL;
+	if (sd_rq)
+		sd = sd_rq->sd;
+	return !sd;
 }
 
 /*

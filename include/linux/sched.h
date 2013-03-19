@@ -959,6 +959,12 @@ struct sched_domain {
 	unsigned long span[0];
 };
 
+struct sched_domain_rq {
+	struct sched_domain *sd;
+	unsigned long flags;
+	struct rcu_head rcu;	/* used during destruction */
+};
+
 static inline struct cpumask *sched_domain_span(struct sched_domain *sd)
 {
 	return to_cpumask(sd->span);
