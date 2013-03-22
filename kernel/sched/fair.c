@@ -4010,7 +4010,8 @@ static int move_tasks(struct lb_env *env)
 		if (sched_feat(LB_MIN) && load < 16 && !env->sd->nr_balance_failed)
 			goto next;
 
-		if ((load / 2) > env->imbalance)
+		if ((load / 2) > env->imbalance &&
+			(env->idle != CPU_IDLE && env->idle != CPU_NEWLY_IDLE))
 			goto next;
 
 		if (!can_migrate_task(p, env))
@@ -4510,6 +4511,15 @@ static inline void update_sg_lb_stats(struct lb_env *env,
 	if (overloaded_cpu)
 		sgs->group_imb = 1;
 
+	/*
+	 * When idle balancing pull tasks if more than one task per cpu
+	 * in group
+	 */
+	if (env->idle == CPU_IDLE || env->idle == CPU_NEWLY_IDLE) {
+		if (group->group_weight < sgs->sum_nr_running)
+			sgs->group_imb = 1;
+	}
+
 	sgs->group_capacity = DIV_ROUND_CLOSEST(group->sgp->power,
 						SCHED_POWER_SCALE);
 	if (!sgs->group_capacity)
@@ -4737,8 +4747,13 @@ void fix_small_imbalance(struct lb_env *env, struct sd_lb_stats *sds)
 			min(sds->this_load_per_task, sds->this_load + tmp);
 	pwr_move /= SCHED_POWER_SCALE;
 
-	/* Move if we gain throughput */
-	if (pwr_move > pwr_now)
+	/*
+	 * Move if we gain throughput, or if we have cpus idling while others
+	 * are running more than one task.
+	 */
+	if ((pwr_move > pwr_now) ||
+		(sds->busiest_group_weight < sds->busiest_nr_running &&
+		(env->idle == CPU_IDLE || env->idle == CPU_NEWLY_IDLE)))
 		env->imbalance = sds->busiest_load_per_task;
 }
 
