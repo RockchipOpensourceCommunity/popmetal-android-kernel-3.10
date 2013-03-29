@@ -105,8 +105,11 @@ static void cpu_pmu_free_irq(struct arm_pmu *pmu)
 	int cpu;
 	struct arm_cpu_pmu *cpu_pmu;
 
-	for (i = 0; i < NR_CPUS; ++i) {
+	for_each_possible_cpu(i) {
 		if (!(cpu_pmu = per_cpu_ptr(pmu->cpu_pmus, i)))
+			continue;
+
+		if (cpu_pmu->mpidr == -1)
 			continue;
 
 		cpu = find_logical_cpu(cpu_pmu->mpidr);
@@ -127,7 +130,7 @@ static int cpu_pmu_request_irq(struct arm_pmu *pmu, irq_handler_t handler)
 	struct arm_cpu_pmu *cpu_pmu;
 
 	irqs = 0;
-	for (i = 0; i < NR_CPUS; i++)
+	for_each_possible_cpu(i)
 		if (per_cpu_ptr(pmu->cpu_pmus, i))
 			++irqs;
 
@@ -136,7 +139,7 @@ static int cpu_pmu_request_irq(struct arm_pmu *pmu, irq_handler_t handler)
 		return -ENODEV;
 	}
 
-	for (i = 0; i < NR_CPUS; i++) {
+	for_each_possible_cpu(i) {
 		if (!(cpu_pmu = per_cpu_ptr(pmu->cpu_pmus, i)))
 			continue;
 
@@ -355,7 +358,7 @@ static int bL_get_partner(int cpu, int cluster)
 	unsigned int i;
 
 
-	for (i = 0; i < NR_CPUS; i++) {
+	for_each_possible_cpu(i) {
 		if (cpu_topology[i].thread_id == cpu_topology[cpu].thread_id &&
 		    cpu_topology[i].core_id == cpu_topology[cpu].core_id &&
 		    cpu_topology[i].socket_id == cluster)
@@ -463,7 +466,7 @@ static int cpu_pmu_device_probe(struct platform_device *pdev)
 		 * make sense when the switcher is disabled.  Ideally, this
 		 * knowledge should come from the swithcer somehow.
 		 */
-		for (i = 0; i < NR_CPUS; i++) {
+		for_each_possible_cpu(i) {
 			int cpu = i;
 
 			per_cpu_ptr(cpu_pmus, i)->mpidr = -1;
