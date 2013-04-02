@@ -1562,6 +1562,16 @@ static inline void dequeue_entity_load_avg(struct cfs_rq *cfs_rq,
 		se->avg.decay_count = atomic64_read(&cfs_rq->decay_counter);
 	} /* migrations, e.g. sleep=0 leave decay_count == 0 */
 }
+
+/*
+ * Update the rq's load with the elapsed idle time before a task is
+ * scheduled. if the newly scheduled task is not a CFS task, idle_exit will
+ * be the only way to update the runnable statistic.
+ */
+void idle_exit(int this_cpu, struct rq *this_rq)
+{
+	update_rq_runnable_avg(this_rq, 0);
+}
 #else
 static inline void update_entity_load_avg(struct sched_entity *se,
 					  int update_cfs_rq) {}
@@ -4007,10 +4017,11 @@ static int move_tasks(struct lb_env *env)
 
 		load = task_h_load(p);
 
-		if (sched_feat(LB_MIN) && load < 16 && !env->sd->nr_balance_failed)
+		if (sched_feat(LB_MIN) && load < 204 && !env->sd->nr_balance_failed)
 			goto next;
 
-		if ((load / 2) > env->imbalance)
+		if ((load / 2) > env->imbalance &&
+			(env->idle != CPU_IDLE && env->idle != CPU_NEWLY_IDLE))
 			goto next;
 
 		if (!can_migrate_task(p, env))
@@ -4415,7 +4426,7 @@ static inline void update_sg_lb_stats(struct lb_env *env,
 {
 	unsigned long nr_running, max_nr_running, min_nr_running;
 	unsigned long load, max_cpu_load, min_cpu_load;
-	unsigned int balance_cpu = -1, first_idle_cpu = 0;
+	unsigned int balance_cpu = -1, first_idle_cpu = 0, overloaded_cpu = 0;
 	unsigned long avg_load_per_task = 0;
 	int i;
 
@@ -4453,6 +4464,11 @@ static inline void update_sg_lb_stats(struct lb_env *env,
 				max_nr_running = nr_running;
 			if (min_nr_running > nr_running)
 				min_nr_running = nr_running;
+
+			if ((load > rq->cpu_power)
+			 && ((rq->cpu_power*env->sd->imbalance_pct) < (env->dst_rq->cpu_power*100))
+			 && (load > target_load(env->dst_cpu, load_idx)))
+				overloaded_cpu = 1;
 		}
 
 		sgs->group_load += load;
@@ -4497,6 +4513,22 @@ static inline void update_sg_lb_stats(struct lb_env *env,
 	if ((max_cpu_load - min_cpu_load) >= avg_load_per_task &&
 	    (max_nr_running - min_nr_running) > 1)
 		sgs->group_imb = 1;
+
+	/*
+	 * The load contrib of a CPU exceeds its capacity, we should try to
+	 * find a better CPU with more capacity
+	 */
+	if (overloaded_cpu)
+		sgs->group_imb = 1;
+
+	/*
+	 * When idle balancing pull tasks if more than one task per cpu
+	 * in group
+	 */
+	if (env->idle == CPU_IDLE || env->idle == CPU_NEWLY_IDLE) {
+		if (group->group_weight < sgs->sum_nr_running)
+			sgs->group_imb = 1;
+	}
 
 	sgs->group_capacity = DIV_ROUND_CLOSEST(group->sgp->power,
 						SCHED_POWER_SCALE);
@@ -4725,8 +4757,13 @@ void fix_small_imbalance(struct lb_env *env, struct sd_lb_stats *sds)
 			min(sds->this_load_per_task, sds->this_load + tmp);
 	pwr_move /= SCHED_POWER_SCALE;
 
-	/* Move if we gain throughput */
-	if (pwr_move > pwr_now)
+	/*
+	 * Move if we gain throughput, or if we have cpus idling while others
+	 * are running more than one task.
+	 */
+	if ((pwr_move > pwr_now) ||
+		(sds->busiest_group_weight < sds->busiest_nr_running &&
+		(env->idle == CPU_IDLE || env->idle == CPU_NEWLY_IDLE)))
 		env->imbalance = sds->busiest_load_per_task;
 }
 
@@ -4911,6 +4948,7 @@ static struct rq *find_busiest_queue(struct lb_env *env,
 				     struct sched_group *group)
 {
 	struct rq *busiest = NULL, *rq;
+	struct rq *overloaded = NULL, *dst_rq = cpu_rq(env->dst_cpu);
 	unsigned long max_load = 0;
 	int i;
 
@@ -4928,6 +4966,17 @@ static struct rq *find_busiest_queue(struct lb_env *env,
 
 		rq = cpu_rq(i);
 		wl = weighted_cpuload(i);
+
+		/*
+		 * If the task requires more power than the current CPU
+		 * capacity and the dst_cpu has more capacity, keep the
+		 * dst_cpu in mind
+		 */
+		if ((rq->nr_running == 1)
+		 && (rq->cfs.runnable_load_avg > rq->cpu_power)
+		 && (rq->cfs.runnable_load_avg > dst_rq->cfs.runnable_load_avg)
+		 && ((rq->cpu_power*env->sd->imbalance_pct) < (dst_rq->cpu_power*100)))
+			overloaded = rq;
 
 		/*
 		 * When comparing with imbalance, use weighted_cpuload()
@@ -4949,6 +4998,9 @@ static struct rq *find_busiest_queue(struct lb_env *env,
 			busiest = rq;
 		}
 	}
+
+	if (!busiest)
+		busiest = overloaded;
 
 	return busiest;
 }
@@ -4976,6 +5028,9 @@ static int need_active_balance(struct lb_env *env)
 		if ((sd->flags & SD_ASYM_PACKING) && env->src_cpu > env->dst_cpu)
 			return 1;
 	}
+
+	if ((power_of(env->src_cpu)*sd->imbalance_pct) < (power_of(env->dst_cpu)*100))
+		return 1;
 
 	return unlikely(sd->nr_balance_failed > sd->cache_nice_tries+2);
 }
@@ -5035,6 +5090,10 @@ redo:
 
 	ld_moved = 0;
 	lb_iterations = 1;
+
+	env.src_cpu   = busiest->cpu;
+	env.src_rq    = busiest;
+
 	if (busiest->nr_running > 1) {
 		/*
 		 * Attempt to move tasks. If find_busiest_group has found
@@ -5043,8 +5102,6 @@ redo:
 		 * correctly treated as an imbalance.
 		 */
 		env.flags |= LBF_ALL_PINNED;
-		env.src_cpu   = busiest->cpu;
-		env.src_rq    = busiest;
 		env.loop_max  = min(sysctl_sched_nr_migrate, busiest->nr_running);
 
 		update_h_load(env.src_cpu);
@@ -5392,31 +5449,39 @@ static inline void nohz_balance_exit_idle(int cpu)
 
 static inline void set_cpu_sd_state_busy(void)
 {
+	struct sched_domain_rq *sd_rq;
 	struct sched_domain *sd;
 	int cpu = smp_processor_id();
 
-	if (!test_bit(NOHZ_IDLE, nohz_flags(cpu)))
-		return;
-	clear_bit(NOHZ_IDLE, nohz_flags(cpu));
-
 	rcu_read_lock();
-	for_each_domain(cpu, sd)
+	sd_rq = get_sched_domain_rq(cpu);
+
+	if (!sd_rq || !test_bit(NOHZ_IDLE, sched_rq_flags(sd_rq)))
+		goto unlock;
+	clear_bit(NOHZ_IDLE, sched_rq_flags(sd_rq));
+
+	for_each_domain_from_rq(sd_rq, sd)
 		atomic_inc(&sd->groups->sgp->nr_busy_cpus);
+unlock:
 	rcu_read_unlock();
 }
 
 void set_cpu_sd_state_idle(void)
 {
+	struct sched_domain_rq *sd_rq;
 	struct sched_domain *sd;
 	int cpu = smp_processor_id();
 
-	if (test_bit(NOHZ_IDLE, nohz_flags(cpu)))
-		return;
-	set_bit(NOHZ_IDLE, nohz_flags(cpu));
-
 	rcu_read_lock();
-	for_each_domain(cpu, sd)
+	sd_rq = get_sched_domain_rq(cpu);
+
+	if (!sd_rq || test_bit(NOHZ_IDLE, sched_rq_flags(sd_rq)))
+		goto unlock;
+	set_bit(NOHZ_IDLE, sched_rq_flags(sd_rq));
+
+	for_each_domain_from_rq(sd_rq, sd)
 		atomic_dec(&sd->groups->sgp->nr_busy_cpus);
+unlock:
 	rcu_read_unlock();
 }
 
@@ -5621,6 +5686,10 @@ static inline int nohz_kick_needed(struct rq *rq, int cpu)
 	if (rq->nr_running >= 2)
 		goto need_kick;
 
+	/* load contrib is higher than cpu capacity */
+	if (rq->cfs.runnable_load_avg > rq->cpu_power)
+		goto need_kick;
+
 	rcu_read_lock();
 	for_each_domain(cpu, sd) {
 		struct sched_group *sg = sd->groups;
@@ -5673,7 +5742,12 @@ static void run_rebalance_domains(struct softirq_action *h)
 
 static inline int on_null_domain(int cpu)
 {
-	return !rcu_dereference_sched(cpu_rq(cpu)->sd);
+	struct sched_domain_rq *sd_rq =
+		rcu_dereference_sched(cpu_rq(cpu)->sd_rq);
+	struct sched_domain *sd = NULL;
+	if (sd_rq)
+		sd = sd_rq->sd;
+	return !sd;
 }
 
 /*

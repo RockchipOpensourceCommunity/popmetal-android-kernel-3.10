@@ -417,7 +417,7 @@ struct rq {
 
 #ifdef CONFIG_SMP
 	struct root_domain *rd;
-	struct sched_domain *sd;
+	struct sched_domain_rq *sd_rq;
 
 	unsigned long cpu_power;
 
@@ -505,20 +505,36 @@ DECLARE_PER_CPU(struct rq, runqueues);
 
 #ifdef CONFIG_SMP
 
-#define rcu_dereference_check_sched_domain(p) \
+#define rcu_dereference_check_sched_domain_rq(p) \
 	rcu_dereference_check((p), \
 			      lockdep_is_held(&sched_domains_mutex))
 
+#define get_sched_domain_rq(cpu) \
+	rcu_dereference_check_sched_domain_rq(cpu_rq(cpu)->sd_rq)
+
+#define rcu_dereference_check_sched_domain(cpu) ({ \
+	struct sched_domain_rq *__sd_rq = get_sched_domain_rq(cpu); \
+	struct sched_domain *__sd = NULL; \
+	if (__sd_rq) \
+		__sd = __sd_rq->sd; \
+	__sd; \
+})
+
+#define sched_rq_flags(sd_rq) (&sd_rq->flags)
+
 /*
- * The domain tree (rq->sd) is protected by RCU's quiescent state transition.
+ * The domain tree (rq->sd_rq) is protected by RCU's quiescent state transition.
  * See detach_destroy_domains: synchronize_sched for details.
  *
  * The domain tree of any CPU may only be accessed from within
  * preempt-disabled sections.
  */
 #define for_each_domain(cpu, __sd) \
-	for (__sd = rcu_dereference_check_sched_domain(cpu_rq(cpu)->sd); \
+	for (__sd = rcu_dereference_check_sched_domain(cpu); \
 			__sd; __sd = __sd->parent)
+
+#define for_each_domain_from_rq(sd_rq, __sd) \
+	for (__sd = sd_rq->sd; __sd; __sd = __sd->parent)
 
 #define for_each_lower_domain(sd) for (; sd; sd = sd->child)
 
@@ -879,10 +895,15 @@ extern const struct sched_class idle_sched_class;
 
 extern void trigger_load_balance(struct rq *rq, int cpu);
 extern void idle_balance(int this_cpu, struct rq *this_rq);
+extern void idle_exit(int this_cpu, struct rq *this_rq);
 
 #else	/* CONFIG_SMP */
 
 static inline void idle_balance(int cpu, struct rq *rq)
+{
+}
+
+static inline void idle_exit(int this_cpu, struct rq *this_rq)
 {
 }
 

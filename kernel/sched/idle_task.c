@@ -13,6 +13,12 @@ select_task_rq_idle(struct task_struct *p, int sd_flag, int flags)
 {
 	return task_cpu(p); /* IDLE tasks as never migrated */
 }
+
+static void pre_schedule_idle(struct rq *rq, struct task_struct *prev)
+{
+	/* Update rq's load with elapsed idle time */
+	idle_exit(smp_processor_id(), rq);
+}
 #endif /* CONFIG_SMP */
 /*
  * Idle tasks are unconditionally rescheduled:
@@ -86,6 +92,7 @@ const struct sched_class idle_sched_class = {
 
 #ifdef CONFIG_SMP
 	.select_task_rq		= select_task_rq_idle,
+	.pre_schedule		= pre_schedule_idle,
 #endif
 
 	.set_curr_task          = set_curr_task_idle,

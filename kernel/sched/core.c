@@ -5602,6 +5602,15 @@ static void destroy_sched_domains(struct sched_domain *sd, int cpu)
 		destroy_sched_domain(sd, cpu);
 }
 
+static void destroy_sched_domain_rq(struct sched_domain_rq *sd_rq, int cpu)
+{
+	if (!sd_rq)
+		return;
+
+	destroy_sched_domains(sd_rq->sd, cpu);
+	kfree_rcu(sd_rq, rcu);
+}
+
 /*
  * Keep a special pointer to the highest sched_domain that has
  * SD_SHARE_PKG_RESOURCE set (Last Level Cache Domain) for this
@@ -5632,10 +5641,23 @@ static void update_top_cache_domain(int cpu)
  * hold the hotplug lock.
  */
 static void
-cpu_attach_domain(struct sched_domain *sd, struct root_domain *rd, int cpu)
+cpu_attach_domain(struct sched_domain_rq *sd_rq, struct root_domain *rd,
+		int cpu)
 {
 	struct rq *rq = cpu_rq(cpu);
-	struct sched_domain *tmp;
+	struct sched_domain_rq *tmp_rq;
+	struct sched_domain *tmp, *sd = NULL;
+
+	/*
+	 * If we don't have any sched_domain and associated object, we can
+	 * directly jump to the attach sequence otherwise we try to degenerate
+	 * the sched_domain
+	 */
+	if (!sd_rq)
+		goto attach;
+
+	/* Get a pointer to the 1st sched_domain */
+	sd = sd_rq->sd;
 
 	/* Remove the sched domains which do not contribute to scheduling. */
 	for (tmp = sd; tmp; ) {
@@ -5658,14 +5680,17 @@ cpu_attach_domain(struct sched_domain *sd, struct root_domain *rd, int cpu)
 		destroy_sched_domain(tmp, cpu);
 		if (sd)
 			sd->child = NULL;
+		/* update sched_domain_rq */
+		sd_rq->sd = sd;
 	}
 
+attach:
 	sched_domain_debug(sd, cpu);
 
 	rq_attach_root(rq, rd);
-	tmp = rq->sd;
-	rcu_assign_pointer(rq->sd, sd);
-	destroy_sched_domains(tmp, cpu);
+	tmp_rq = rq->sd_rq;
+	rcu_assign_pointer(rq->sd_rq, sd_rq);
+	destroy_sched_domain_rq(tmp_rq, cpu);
 
 	update_top_cache_domain(cpu);
 }
@@ -5695,12 +5720,14 @@ struct sd_data {
 };
 
 struct s_data {
+	struct sched_domain_rq ** __percpu sd_rq;
 	struct sched_domain ** __percpu sd;
 	struct root_domain	*rd;
 };
 
 enum s_alloc {
 	sa_rootdomain,
+	sa_sd_rq,
 	sa_sd,
 	sa_sd_storage,
 	sa_none,
@@ -5935,7 +5962,7 @@ static void init_sched_groups_power(int cpu, struct sched_domain *sd)
 		return;
 
 	update_group_power(sd, cpu);
-	atomic_set(&sg->sgp->nr_busy_cpus, sg->group_weight);
+	atomic_set(&sg->sgp->nr_busy_cpus, 0);
 }
 
 int __weak arch_sd_sibling_asym_packing(void)
@@ -6011,6 +6038,8 @@ static void set_domain_attribute(struct sched_domain *sd,
 
 static void __sdt_free(const struct cpumask *cpu_map);
 static int __sdt_alloc(const struct cpumask *cpu_map);
+static void __sdrq_free(const struct cpumask *cpu_map, struct s_data *d);
+static int __sdrq_alloc(const struct cpumask *cpu_map, struct s_data *d);
 
 static void __free_domain_allocs(struct s_data *d, enum s_alloc what,
 				 const struct cpumask *cpu_map)
@@ -6019,6 +6048,9 @@ static void __free_domain_allocs(struct s_data *d, enum s_alloc what,
 	case sa_rootdomain:
 		if (!atomic_read(&d->rd->refcount))
 			free_rootdomain(&d->rd->rcu); /* fall through */
+	case sa_sd_rq:
+		__sdrq_free(cpu_map, d); /* fall through */
+		free_percpu(d->sd_rq); /* fall through */
 	case sa_sd:
 		free_percpu(d->sd); /* fall through */
 	case sa_sd_storage:
@@ -6038,9 +6070,14 @@ static enum s_alloc __visit_domain_allocation_hell(struct s_data *d,
 	d->sd = alloc_percpu(struct sched_domain *);
 	if (!d->sd)
 		return sa_sd_storage;
+	d->sd_rq = alloc_percpu(struct sched_domain_rq *);
+	if (!d->sd_rq)
+		return sa_sd;
+	if (__sdrq_alloc(cpu_map, d))
+		return sa_sd_rq;
 	d->rd = alloc_rootdomain();
 	if (!d->rd)
-		return sa_sd;
+		return sa_sd_rq;
 	return sa_rootdomain;
 }
 
@@ -6466,6 +6503,46 @@ static void __sdt_free(const struct cpumask *cpu_map)
 	}
 }
 
+static int __sdrq_alloc(const struct cpumask *cpu_map, struct s_data *d)
+{
+	int j;
+
+	for_each_cpu(j, cpu_map) {
+		struct sched_domain_rq *sd_rq;
+
+		sd_rq = kzalloc_node(sizeof(struct sched_domain_rq),
+				GFP_KERNEL, cpu_to_node(j));
+		if (!sd_rq)
+			return -ENOMEM;
+
+		*per_cpu_ptr(d->sd_rq, j) = sd_rq;
+	}
+
+	return 0;
+}
+
+static void __sdrq_free(const struct cpumask *cpu_map, struct s_data *d)
+{
+	int j;
+
+	for_each_cpu(j, cpu_map)
+		if (*per_cpu_ptr(d->sd_rq, j))
+			kfree(*per_cpu_ptr(d->sd_rq, j));
+}
+
+static void build_sched_domain_rq(struct s_data *d, int cpu)
+{
+	struct sched_domain_rq *sd_rq;
+	struct sched_domain *sd;
+
+	/* Attach sched_domain to sched_domain_rq */
+	sd = *per_cpu_ptr(d->sd, cpu);
+	sd_rq = *per_cpu_ptr(d->sd_rq, cpu);
+	sd_rq->sd = sd;
+	/* Init flags */
+	set_bit(NOHZ_IDLE, sched_rq_flags(sd_rq));
+}
+
 struct sched_domain *build_sched_domain(struct sched_domain_topology_level *tl,
 		struct s_data *d, const struct cpumask *cpu_map,
 		struct sched_domain_attr *attr, struct sched_domain *child,
@@ -6495,6 +6572,7 @@ static int build_sched_domains(const struct cpumask *cpu_map,
 			       struct sched_domain_attr *attr)
 {
 	enum s_alloc alloc_state = sa_none;
+	struct sched_domain_rq *sd_rq;
 	struct sched_domain *sd;
 	struct s_data d;
 	int i, ret = -ENOMEM;
@@ -6547,11 +6625,18 @@ static int build_sched_domains(const struct cpumask *cpu_map,
 		}
 	}
 
+	/* Init objects that must follow the sched_domain lifecycle */
+	for_each_cpu(i, cpu_map) {
+		build_sched_domain_rq(&d, i);
+	}
+
 	/* Attach the domains */
 	rcu_read_lock();
 	for_each_cpu(i, cpu_map) {
-		sd = *per_cpu_ptr(d.sd, i);
-		cpu_attach_domain(sd, d.rd, i);
+		sd_rq = *per_cpu_ptr(d.sd_rq, i);
+		cpu_attach_domain(sd_rq, d.rd, i);
+		/* claim allocation of sched_domain_rq object */
+		*per_cpu_ptr(d.sd_rq, i) = NULL;
 	}
 	rcu_read_unlock();
 
@@ -6982,7 +7067,7 @@ void __init sched_init(void)
 		rq->last_load_update_tick = jiffies;
 
 #ifdef CONFIG_SMP
-		rq->sd = NULL;
+		rq->sd_rq = NULL;
 		rq->rd = NULL;
 		rq->cpu_power = SCHED_POWER_SCALE;
 		rq->post_schedule = 0;
