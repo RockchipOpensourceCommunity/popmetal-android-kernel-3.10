@@ -183,7 +183,7 @@ void update_packing_domain(int cpu)
 
 	sd = highest_flag_domain(cpu, SD_SHARE_POWERDOMAIN);
 	if (!sd)
-		sd = rcu_dereference_check_sched_domain(cpu_rq(cpu)->sd);
+		sd = rcu_dereference_check_sched_domain(cpu);
 	else
 		sd = sd->parent;
 
