@@ -1041,6 +1041,7 @@ struct sched_domain;
 #else
 #define ENQUEUE_WAKING		0
 #endif
+#define ENQUEUE_NEWTASK		8
 
 #define DEQUEUE_SLEEP		1
 
@@ -1166,8 +1167,8 @@ struct sched_entity {
 	/* rq "owned" by this entity/group: */
 	struct cfs_rq		*my_q;
 #endif
+
 #ifdef CONFIG_SMP
-	/* Per-entity load-tracking */
 	struct sched_avg	avg;
 #endif
 };
