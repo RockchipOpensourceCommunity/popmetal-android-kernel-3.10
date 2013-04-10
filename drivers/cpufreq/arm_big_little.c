@@ -357,7 +357,7 @@ static void put_cluster_clk_and_freq_table(u32 cluster)
 
 static int _get_cluster_clk_and_freq_table(u32 cluster)
 {
-	char name[9] = "cluster";
+	char name[9] = "clusterX";
 	int count;
 
 	if (atomic_inc_return(&cluster_usage[cluster]) != 1)
