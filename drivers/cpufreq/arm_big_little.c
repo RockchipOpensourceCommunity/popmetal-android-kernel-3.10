@@ -353,6 +353,9 @@ static void put_cluster_clk_and_freq_table(u32 cluster)
 
 	for (i = 0; i < MAX_CLUSTERS; i++)
 		_put_cluster_clk_and_freq_table(i);
+
+	/* free virtual table */
+	arm_bL_free_freq_table(MAX_CLUSTERS);
 }
 
 static int _get_cluster_clk_and_freq_table(u32 cluster)
