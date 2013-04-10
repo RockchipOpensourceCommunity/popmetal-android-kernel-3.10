@@ -352,7 +352,7 @@ static void put_cluster_clk_and_freq_table(u32 cluster)
 		return;
 
 	for (i = 0; i < MAX_CLUSTERS; i++)
-		return _put_cluster_clk_and_freq_table(i);
+		_put_cluster_clk_and_freq_table(i);
 }
 
 static int _get_cluster_clk_and_freq_table(u32 cluster)
@@ -582,7 +582,7 @@ void bL_cpufreq_unregister(struct cpufreq_arm_bL_ops *ops)
 		int i;
 
 		for (i = 0; i < MAX_CLUSTERS; i++)
-			return put_cluster_clk_and_freq_table(i);
+			put_cluster_clk_and_freq_table(i);
 	}
 
 	arm_bL_ops = NULL;
