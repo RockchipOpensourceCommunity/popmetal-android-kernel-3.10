@@ -11,6 +11,8 @@
 #include <linux/init.h>
 #include <linux/io.h>
 #include <linux/module.h>
+#include <linux/of.h>
+#include <linux/of_address.h>
 #include <asm/hardware/cache-l2x0.h>
 
 #include "gator.h"
@@ -150,6 +152,12 @@ static void __iomem *gator_events_l2c310_probe(void)
 #endif
 	};
 	int i;
+
+#if defined(CONFIG_OF)
+	if (of_have_populated_dt())
+		return of_iomap(of_find_compatible_node(NULL,
+				NULL, "arm,pl310-cache"), 0);
+#endif
 
 	for (i = 0; i < ARRAY_SIZE(variants); i++) {
 		void __iomem *base = ioremap(variants[i], SZ_4K);
