@@ -260,6 +260,19 @@ static int cpu_has_aliasing_icache(unsigned int arch)
 	int aliasing_icache;
 	unsigned int id_reg, num_sets, line_size;
 
+#ifdef CONFIG_BIG_LITTLE
+	/*
+	 * We expect a combination of Cortex-A15 and Cortex-A7 cores.
+	 * A7 = VIPT aliasing I-cache
+	 * A15 = PIPT (non-aliasing) I-cache
+	 * To cater for this discrepancy, let's assume aliasing I-cache
+	 * all the time.  This means unneeded extra work on the A15 but
+	 * only ptrace is affected which is not performance critical.
+	 */
+	if ((read_cpuid_id() & 0xff0ffff0) == 0x410fc0f0)
+		return 1;
+#endif
+
 	/* PIPT caches never alias. */
 	if (icache_is_pipt())
 		return 0;
@@ -389,7 +402,7 @@ static void __init feat_v6_fixup(void)
  *
  * cpu_init sets up the per-CPU stacks.
  */
-void cpu_init(void)
+void notrace cpu_init(void)
 {
 	unsigned int cpu = smp_processor_id();
 	struct stack *stk = &stacks[cpu];
@@ -787,7 +800,10 @@ void __init setup_arch(char **cmdline_p)
 	arm_dt_init_cpu_maps();
 #ifdef CONFIG_SMP
 	if (is_smp()) {
-		smp_set_ops(mdesc->smp);
+		if (!mdesc->smp_init || !mdesc->smp_init()) {
+			if(mdesc->smp)
+				smp_set_ops(mdesc->smp);
+		}
 		smp_init_cpus();
 	}
 #endif

@@ -8,6 +8,7 @@
 #include <linux/smp.h>
 #include <linux/init.h>
 #include <linux/irqchip.h>
+#include <linux/memblock.h>
 #include <linux/of_address.h>
 #include <linux/of_fdt.h>
 #include <linux/of_irq.h>
@@ -56,7 +57,8 @@ static struct map_desc v2m_io_desc[] __initdata = {
 	},
 };
 
-static void __init v2m_sp804_init(void __iomem *base, unsigned int irq)
+static void __init v2m_sp804_init(void __iomem *base, unsigned int irq,
+		struct clk *clk1, struct clk *clk2)
 {
 	if (WARN_ON(!base || irq == NO_IRQ))
 		return;
@@ -64,8 +66,8 @@ static void __init v2m_sp804_init(void __iomem *base, unsigned int irq)
 	writel(0, base + TIMER_1_BASE + TIMER_CTRL);
 	writel(0, base + TIMER_2_BASE + TIMER_CTRL);
 
-	sp804_clocksource_init(base + TIMER_2_BASE, "v2m-timer1");
-	sp804_clockevents_init(base + TIMER_1_BASE, irq, "v2m-timer0");
+	sp804_clocksource_init(base + TIMER_2_BASE, "v2m-timer1", clk2);
+	sp804_clockevents_init(base + TIMER_1_BASE, irq, "v2m-timer0", clk1);
 }
 
 
@@ -288,7 +290,7 @@ static struct amba_device *v2m_amba_devs[] __initdata = {
 static void __init v2m_timer_init(void)
 {
 	vexpress_clk_init(ioremap(V2M_SYSCTL, SZ_4K));
-	v2m_sp804_init(ioremap(V2M_TIMER01, SZ_4K), IRQ_V2M_TIMER0);
+	v2m_sp804_init(ioremap(V2M_TIMER01, SZ_4K), IRQ_V2M_TIMER0, NULL, NULL);
 }
 
 static void __init v2m_init_early(void)
@@ -361,8 +363,6 @@ static void __init v2m_init(void)
 	for (i = 0; i < ARRAY_SIZE(v2m_amba_devs); i++)
 		amba_device_register(v2m_amba_devs[i], &iomem_resource);
 
-	pm_power_off = vexpress_power_off;
-
 	ct_desc->init_tile();
 }
 
@@ -374,8 +374,32 @@ MACHINE_START(VEXPRESS, "ARM-Versatile Express")
 	.init_irq	= v2m_init_irq,
 	.init_time	= v2m_timer_init,
 	.init_machine	= v2m_init,
-	.restart	= vexpress_restart,
 MACHINE_END
+
+static void __init v2m_dt_hdlcd_init(void)
+{
+	struct device_node *node;
+	int len, na, ns;
+	const __be32 *prop;
+	phys_addr_t fb_base, fb_size;
+
+	node = of_find_compatible_node(NULL, NULL, "arm,hdlcd");
+	if (!node)
+		return;
+
+	na = of_n_addr_cells(node);
+	ns = of_n_size_cells(node);
+
+	prop = of_get_property(node, "framebuffer", &len);
+	if (WARN_ON(!prop || len < (na + ns) * sizeof(*prop)))
+		return;
+
+	fb_base = of_read_number(prop, na);
+	fb_size = of_read_number(prop + na, ns);
+
+	if (WARN_ON(memblock_remove(fb_base, fb_size)))
+		return;
+};
 
 static struct map_desc v2m_rs1_io_desc __initdata = {
 	.virtual	= V2M_PERIPH,
@@ -427,6 +451,8 @@ void __init v2m_dt_init_early(void)
 			pr_warning("vexpress: DT HBI (%x) is not matching "
 					"hardware (%x)!\n", dt_hbi, hbi);
 	}
+
+	v2m_dt_hdlcd_init();
 }
 
 static void __init v2m_dt_timer_init(void)
@@ -442,7 +468,9 @@ static void __init v2m_dt_timer_init(void)
 		pr_info("Using SP804 '%s' as a clock & events source\n",
 				node->full_name);
 		v2m_sp804_init(of_iomap(node, 0),
-				irq_of_parse_and_map(node, 0));
+				irq_of_parse_and_map(node, 0),
+				of_clk_get_by_name(node, "timclken1"),
+				of_clk_get_by_name(node, "timclken2"));
 	}
 
 	if (arch_timer_of_register() != 0)
@@ -464,7 +492,6 @@ static void __init v2m_dt_init(void)
 {
 	l2x0_of_init(0x00400000, 0xfe0fffff);
 	of_platform_populate(NULL, v2m_dt_bus_match, NULL, NULL);
-	pm_power_off = vexpress_power_off;
 }
 
 static const char * const v2m_dt_match[] __initconst = {
@@ -476,10 +503,10 @@ static const char * const v2m_dt_match[] __initconst = {
 DT_MACHINE_START(VEXPRESS_DT, "ARM-Versatile Express")
 	.dt_compat	= v2m_dt_match,
 	.smp		= smp_ops(vexpress_smp_ops),
+	.smp_init	= smp_init_ops(vexpress_smp_init_ops),
 	.map_io		= v2m_dt_map_io,
 	.init_early	= v2m_dt_init_early,
 	.init_irq	= irqchip_init,
 	.init_time	= v2m_dt_timer_init,
 	.init_machine	= v2m_dt_init,
-	.restart	= vexpress_restart,
 MACHINE_END
