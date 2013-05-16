@@ -53,7 +53,7 @@ static int read_mpidr(void)
 {
 	unsigned int id;
 	asm volatile ("mrc\tp15, 0, %0, c0, c0, 5" : "=r" (id));
-	return id;
+	return id & MPIDR_HWID_BITMASK;
 }
 
 /*
@@ -72,16 +72,14 @@ static s64 get_ns(void)
 
 static void bL_do_switch(void *_arg)
 {
-	unsigned mpidr, cpuid, clusterid, ob_cluster, ib_cluster;
+	unsigned ib_mpidr, ib_cpu, ib_cluster;
 	long volatile handshake, **handshake_ptr = _arg;
 
 	pr_debug("%s\n", __func__);
 
-	mpidr = read_mpidr();
-	cpuid = MPIDR_AFFINITY_LEVEL(mpidr, 0);
-	clusterid = MPIDR_AFFINITY_LEVEL(mpidr, 1);
-	ob_cluster = clusterid;
-	ib_cluster = clusterid ^ 1;
+	ib_mpidr = cpu_logical_map(smp_processor_id());
+	ib_cpu = MPIDR_AFFINITY_LEVEL(ib_mpidr, 0);
+	ib_cluster = MPIDR_AFFINITY_LEVEL(ib_mpidr, 1);
 
 	/* Advertise our handshake location */
 	if (handshake_ptr) {
@@ -94,7 +92,7 @@ static void bL_do_switch(void *_arg)
 	 * Our state has been saved at this point.  Let's release our
 	 * inbound CPU.
 	 */
-	mcpm_set_entry_vector(cpuid, ib_cluster, cpu_resume);
+	mcpm_set_entry_vector(ib_cpu, ib_cluster, cpu_resume);
 	sev();
 
 	/*
@@ -148,6 +146,7 @@ static int bL_switchpoint(unsigned long _arg)
  */
 
 static unsigned int bL_gic_id[MAX_CPUS_PER_CLUSTER][MAX_NR_CLUSTERS];
+static int bL_switcher_cpu_pairing[NR_CPUS];
 
 /*
  * bL_switch_to - Switch to a specific cluster for the current CPU
@@ -158,41 +157,46 @@ static unsigned int bL_gic_id[MAX_CPUS_PER_CLUSTER][MAX_NR_CLUSTERS];
  */
 static int bL_switch_to(unsigned int new_cluster_id)
 {
-	unsigned int mpidr, cpuid, clusterid, ob_cluster, ib_cluster, this_cpu;
+	unsigned int mpidr, this_cpu, that_cpu;
+	unsigned int ob_mpidr, ob_cpu, ob_cluster, ib_mpidr, ib_cpu, ib_cluster;
 	struct completion inbound_alive;
 	struct tick_device *tdev;
 	enum clock_event_mode tdev_mode;
 	long volatile *handshake_ptr;
 	int ipi_nr, ret;
 
-	mpidr = read_mpidr();
-	cpuid = MPIDR_AFFINITY_LEVEL(mpidr, 0);
-	clusterid = MPIDR_AFFINITY_LEVEL(mpidr, 1);
-	ob_cluster = clusterid;
-	ib_cluster = clusterid ^ 1;
+	this_cpu = smp_processor_id();
+	ob_mpidr = read_mpidr();
+	ob_cpu = MPIDR_AFFINITY_LEVEL(ob_mpidr, 0);
+	ob_cluster = MPIDR_AFFINITY_LEVEL(ob_mpidr, 1);
+	BUG_ON(cpu_logical_map(this_cpu) != ob_mpidr);
 
-	if (new_cluster_id == clusterid)
+	if (new_cluster_id == ob_cluster)
 		return 0;
 
-	pr_debug("before switch: CPU %d in cluster %d\n", cpuid, clusterid);
+	that_cpu = bL_switcher_cpu_pairing[this_cpu];
+	ib_mpidr = cpu_logical_map(that_cpu);
+	ib_cpu = MPIDR_AFFINITY_LEVEL(ib_mpidr, 0);
+	ib_cluster = MPIDR_AFFINITY_LEVEL(ib_mpidr, 1);
 
-	this_cpu = smp_processor_id();
+	pr_debug("before switch: CPU %d MPIDR %#x -> %#x\n",
+		 this_cpu, ob_mpidr, ib_mpidr);
 
 	/* Close the gate for our entry vectors */
-	mcpm_set_entry_vector(cpuid, ob_cluster, NULL);
-	mcpm_set_entry_vector(cpuid, ib_cluster, NULL);
+	mcpm_set_entry_vector(ob_cpu, ob_cluster, NULL);
+	mcpm_set_entry_vector(ib_cpu, ib_cluster, NULL);
 
 	/* Install our "inbound alive" notifier. */
 	init_completion(&inbound_alive);
 	ipi_nr = register_ipi_completion(&inbound_alive, this_cpu);
-	ipi_nr |= ((1 << 16) << bL_gic_id[cpuid][ob_cluster]);
-	mcpm_set_early_poke(cpuid, ib_cluster, gic_get_sgir_physaddr(), ipi_nr);
+	ipi_nr |= ((1 << 16) << bL_gic_id[ob_cpu][ob_cluster]);
+	mcpm_set_early_poke(ib_cpu, ib_cluster, gic_get_sgir_physaddr(), ipi_nr);
 
 	/*
 	 * Let's wake up the inbound CPU now in case it requires some delay
 	 * to come online, but leave it gated in our entry vector code.
 	 */
-	ret = mcpm_cpu_power_up(cpuid, ib_cluster);
+	ret = mcpm_cpu_power_up(ib_cpu, ib_cluster);
 	if (ret) {
 		pr_err("%s: mcpm_cpu_power_up() returned %d\n", __func__, ret);
 		return ret;
@@ -202,14 +206,14 @@ static int bL_switch_to(unsigned int new_cluster_id)
 	 * Raise a SGI on the inbound CPU to make sure it doesn't stall
 	 * in a possible WFI, such as in bL_power_down().
 	 */
-	gic_send_sgi(bL_gic_id[cpuid][ib_cluster], 0);
+	gic_send_sgi(bL_gic_id[ib_cpu][ib_cluster], 0);
 
 	/*
 	 * Wait for the inbound to come up.  This allows for other
 	 * tasks to be scheduled in the mean time.
 	 */
 	wait_for_completion(&inbound_alive);
-	mcpm_set_early_poke(cpuid, ib_cluster, 0, 0);
+	mcpm_set_early_poke(ib_cpu, ib_cluster, 0, 0);
 
 	/*
 	 * From this point we are entering the switch critical zone
@@ -217,10 +221,10 @@ static int bL_switch_to(unsigned int new_cluster_id)
 	 */
 	local_irq_disable();
 	local_fiq_disable();
-	trace_cpu_migrate_begin(get_ns(), mpidr & MPIDR_HWID_BITMASK);
+	trace_cpu_migrate_begin(get_ns(), ob_mpidr);
 
 	/* redirect GIC's SGIs to our counterpart */
-	gic_migrate_target(bL_gic_id[cpuid][ib_cluster]);
+	gic_migrate_target(bL_gic_id[ib_cpu][ib_cluster]);
 
 	tdev = tick_get_device(this_cpu);
 	if (tdev && !cpumask_equal(tdev->evtdev->cpumask, cpumask_of(this_cpu)))
@@ -237,13 +241,13 @@ static int bL_switch_to(unsigned int new_cluster_id)
 		panic("%s: cpu_pm_enter() returned %d\n", __func__, ret);
 
 	/*
-	 * Flip the cluster in the CPU logical map for this CPU.
+	 * Swap the physical CPUs in the logical map for this logical CPU.
 	 * This must be flushed to RAM as the resume code
 	 * needs to access it while the caches are still disabled.
 	 */
-	cpu_logical_map(this_cpu) ^= (1 << 8);
-	__cpuc_flush_dcache_area(&cpu_logical_map(this_cpu),
-				 sizeof(cpu_logical_map(this_cpu)));
+	cpu_logical_map(this_cpu) = ib_mpidr;
+	cpu_logical_map(that_cpu) = ob_mpidr;
+	sync_cache_w(&cpu_logical_map(this_cpu));
 
 	/* Let's do the actual CPU switch. */
 	ret = cpu_suspend((unsigned long)&handshake_ptr, bL_switchpoint);
@@ -252,10 +256,8 @@ static int bL_switch_to(unsigned int new_cluster_id)
 
 	/* We are executing on the inbound CPU at this point */
 	mpidr = read_mpidr();
-	cpuid = MPIDR_AFFINITY_LEVEL(mpidr, 0);
-	clusterid = MPIDR_AFFINITY_LEVEL(mpidr, 1);
-	pr_debug("after switch: CPU %d in cluster %d\n", cpuid, clusterid);
-	BUG_ON(clusterid != ib_cluster);
+	pr_debug("after switch: CPU %d MPIDR %#x\n", this_cpu, mpidr);
+	BUG_ON(mpidr != ib_mpidr);
 
 	mcpm_cpu_powered_up();
 
@@ -267,7 +269,7 @@ static int bL_switch_to(unsigned int new_cluster_id)
 					  tdev->evtdev->next_event, 1);
 	}
 
-	trace_cpu_migrate_finish(get_ns(), mpidr & MPIDR_HWID_BITMASK);
+	trace_cpu_migrate_finish(get_ns(), ib_mpidr);
 	local_fiq_enable();
 	local_irq_enable();
 
@@ -400,52 +402,74 @@ static void bL_switcher_restore_cpus(void)
 
 static int bL_switcher_halve_cpus(void)
 {
-	int cpu, cluster, i, ret;
-	cpumask_t cluster_mask[2], common_mask;
+	int i, j, gic_id, ret;
+	unsigned int cpu, cluster, cntpart, mask;
+	cpumask_t available_cpus;
 
-	cpumask_clear(&bL_switcher_removed_logical_cpus);
-	cpumask_clear(&cluster_mask[0]);
-	cpumask_clear(&cluster_mask[1]);
-
+	/* First pass to validate what we have */
+	mask = 0;
 	for_each_online_cpu(i) {
-		cpu = cpu_logical_map(i) & 0xff;
-		cluster = (cpu_logical_map(i) >> 8) & 0xff;
+		cpu = MPIDR_AFFINITY_LEVEL(cpu_logical_map(i), 0);
+		cluster = MPIDR_AFFINITY_LEVEL(cpu_logical_map(i), 1);
 		if (cluster >= 2) {
 			pr_err("%s: only dual cluster systems are supported\n", __func__);
 			return -EINVAL;
 		}
-		cpumask_set_cpu(cpu, &cluster_mask[cluster]);
+		if (WARN_ON(cpu >= MAX_CPUS_PER_CLUSTER))
+			return -EINVAL;
+		mask |= (1 << cluster);
 	}
-
-	if (!cpumask_and(&common_mask, &cluster_mask[0], &cluster_mask[1])) {
-		pr_err("%s: no common set of CPUs\n", __func__);
+	if (mask != 3) {
+		pr_err("%s: no CPU pairing possible\n", __func__);
 		return -EINVAL;
 	}
 
+	/*
+	 * Now let's do the pairing.  We match each CPU with another CPU
+	 * from a different cluster.  To keep the logical CPUs contiguous,
+	 * the pairing is done backward from the end of the CPU list.
+	 */
+	memset(bL_switcher_cpu_pairing, -1, sizeof(bL_switcher_cpu_pairing));
+	cpumask_copy(&available_cpus, cpu_online_mask);
+	for_each_cpu(i, &available_cpus) {
+		int match = -1;
+		cluster = MPIDR_AFFINITY_LEVEL(cpu_logical_map(i), 1);
+		cpumask_clear_cpu(i, &available_cpus);
+		for_each_cpu(j, &available_cpus) {
+			cntpart = MPIDR_AFFINITY_LEVEL(cpu_logical_map(j), 1);
+			if (cntpart != cluster)
+				match = j;
+		}
+		if (match != -1) {
+			bL_switcher_cpu_pairing[i] = match;
+			cpumask_clear_cpu(match, &available_cpus);
+			pr_info("CPU%d paired with CPU%d\n", i, match);
+		}
+	}
+
+	/*
+	 * Now we disable the unwanted CPUs i.e. everything that has no
+	 * pairing information (that includes the pairing counterparts).
+	 */ 
+	cpumask_clear(&bL_switcher_removed_logical_cpus);
 	for_each_online_cpu(i) {
-		cpu = cpu_logical_map(i) & 0xff;
-		cluster = (cpu_logical_map(i) >> 8) & 0xff;
+		cpu = MPIDR_AFFINITY_LEVEL(cpu_logical_map(i), 0);
+		cluster = MPIDR_AFFINITY_LEVEL(cpu_logical_map(i), 1);
 
-		if (cpumask_test_cpu(cpu, &common_mask)) {
-			/* Let's take note of the GIC ID for this CPU */
-			int gic_id = gic_get_cpu_id(i);
-			if (gic_id < 0) {
-				pr_err("%s: bad GIC ID for CPU %d\n", __func__, i);
-				return -EINVAL;
-			}
-			bL_gic_id[cpu][cluster] = gic_id;
-			pr_info("GIC ID for CPU %u cluster %u is %u\n",
-				cpu, cluster, gic_id);
+		/* Let's take note of the GIC ID for this CPU */
+		gic_id = gic_get_cpu_id(i);
+		if (gic_id < 0) {
+			pr_err("%s: bad GIC ID for CPU %d\n", __func__, i);
+			bL_switcher_restore_cpus();
+			return -EINVAL;
+		}
+		bL_gic_id[cpu][cluster] = gic_id;
+		pr_info("GIC ID for CPU %u cluster %u is %u\n",
+			cpu, cluster, gic_id);
 
-			/*
-			 * We keep only those logical CPUs which number
-			 * is equal to their physical CPU number. This is
-			 * not perfect but good enough in most cases.
-			 */
-			if (cpu == i) {
-				bL_switcher_cpu_original_cluster[cpu] = cluster;
-				continue;
-			}
+		if (bL_switcher_cpu_pairing[i] != -1) {
+			bL_switcher_cpu_original_cluster[i] = cluster;
+			continue;
 		}
 
 		ret = cpu_down(i);
@@ -462,20 +486,26 @@ static int bL_switcher_halve_cpus(void)
 /* Determine the logical CPU a given physical CPU is grouped on. */
 int bL_switcher_get_logical_index(u32 mpidr)
 {
-	int cpu = MPIDR_AFFINITY_LEVEL(mpidr, 0);
+	int cpu;
 
 	if (!bL_switcher_active)
 		return -EUNATCH;
 
-	if (cpumask_test_cpu(cpu, &bL_switcher_removed_logical_cpus))
-		return -EINVAL;
-
-	return cpu;
+	mpidr &= MPIDR_HWID_BITMASK; 
+	for_each_online_cpu(cpu) {
+		int pairing = bL_switcher_cpu_pairing[cpu];
+		if (pairing == -1)
+			continue;
+		if ((mpidr == cpu_logical_map(cpu)) ||
+		    (mpidr == cpu_logical_map(pairing)))
+			return cpu;
+	}
+	return -EINVAL;
 }
 
 static void bL_switcher_trace_trigger_cpu(void *__always_unused info)
 {
-	trace_cpu_migrate_current(get_ns(), read_mpidr() & MPIDR_HWID_BITMASK);
+	trace_cpu_migrate_current(get_ns(), read_mpidr());
 }
 
 int bL_switcher_trace_trigger(void)
@@ -544,7 +574,7 @@ out:
 
 static void bL_switcher_disable(void)
 {
-	unsigned int cpu, cluster, i;
+	unsigned int cpu, cluster;
 	struct bL_thread *t;
 	struct task_struct *task;
 
@@ -570,15 +600,14 @@ static void bL_switcher_disable(void)
 	 * possibility for interference from external requests.
 	 */
 	for_each_online_cpu(cpu) {
-		BUG_ON(cpu != (cpu_logical_map(cpu) & 0xff));
 		t = &bL_threads[cpu];
 		task = t->task;
 		t->task = NULL;
-		if (IS_ERR_OR_NULL(task))
+		if (!task || IS_ERR(task))
 			continue;
 		kthread_stop(task);
 		/* no more switch may happen on this CPU at this point */
-		cluster = (cpu_logical_map(cpu) >> 8) & 0xff;
+		cluster = MPIDR_AFFINITY_LEVEL(cpu_logical_map(cpu), 1);
 		if (cluster == bL_switcher_cpu_original_cluster[cpu])
 			continue;
 		init_completion(&t->started);
@@ -587,21 +616,17 @@ static void bL_switcher_disable(void)
 		if (!IS_ERR(task)) {
 			wait_for_completion(&t->started);
 			kthread_stop(task);
-			cluster = (cpu_logical_map(cpu) >> 8) & 0xff;
+			cluster = MPIDR_AFFINITY_LEVEL(cpu_logical_map(cpu), 1);
 			if (cluster == bL_switcher_cpu_original_cluster[cpu])
 				continue;
 		}
 		/* If execution gets here, we're in trouble. */
 		pr_crit("%s: unable to restore original cluster for CPU %d\n",
 			__func__, cpu);
-		for_each_cpu(i, &bL_switcher_removed_logical_cpus) {
-			if ((cpu_logical_map(i) & 0xff) != cpu)
-				continue;
-			pr_crit("%s: CPU %d can't be restored\n",
-				__func__, i);
-			cpumask_clear_cpu(i, &bL_switcher_removed_logical_cpus);
-			break;
-		}
+		pr_crit("%s: CPU %d can't be restored\n",
+			__func__, bL_switcher_cpu_pairing[cpu]);
+		cpumask_clear_cpu(bL_switcher_cpu_pairing[cpu],
+				  &bL_switcher_removed_logical_cpus);
 	}
 
 	bL_switcher_restore_cpus();
