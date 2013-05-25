@@ -205,7 +205,7 @@ static void
 armpmu_del(struct perf_event *event, int flags)
 {
 	struct arm_pmu *armpmu = to_arm_pmu(event->pmu);
-	struct pmu_hw_events *hw_events = armpmu->get_hw_events();
+	struct pmu_hw_events *hw_events = armpmu->get_hw_events(armpmu);
 	struct hw_perf_event *hwc = &event->hw;
 	int idx = hwc->idx;
 
@@ -223,7 +223,7 @@ static int
 armpmu_add(struct perf_event *event, int flags)
 {
 	struct arm_pmu *armpmu = to_arm_pmu(event->pmu);
-	struct pmu_hw_events *hw_events = armpmu->get_hw_events();
+	struct pmu_hw_events *hw_events = armpmu->get_hw_events(armpmu);
 	struct hw_perf_event *hwc = &event->hw;
 	int idx;
 	int err = 0;
@@ -467,8 +467,14 @@ static int armpmu_event_init(struct perf_event *event)
 static void armpmu_enable(struct pmu *pmu)
 {
 	struct arm_pmu *armpmu = to_arm_pmu(pmu);
-	struct pmu_hw_events *hw_events = armpmu->get_hw_events();
-	int enabled = bitmap_weight(hw_events->used_mask, armpmu->num_events);
+	struct pmu_hw_events *hw_events = armpmu->get_hw_events(armpmu);
+	int enabled;
+	
+	if (!cpumask_test_cpu(smp_processor_id(), &armpmu->valid_cpus))
+		return;
+
+	BUG_ON(!hw_events->used_mask); /* TEMPORARY */
+	enabled = bitmap_weight(hw_events->used_mask, armpmu->num_events);
 
 	if (enabled)
 		armpmu->start(armpmu);
@@ -477,6 +483,10 @@ static void armpmu_enable(struct pmu *pmu)
 static void armpmu_disable(struct pmu *pmu)
 {
 	struct arm_pmu *armpmu = to_arm_pmu(pmu);
+
+	if (!cpumask_test_cpu(smp_processor_id(), &armpmu->valid_cpus))
+		return;
+
 	armpmu->stop(armpmu);
 }
 
