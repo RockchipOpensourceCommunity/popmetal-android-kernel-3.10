@@ -1,0 +1,47 @@
+Synchronous cluster switching interface for the ARM big.LITTLE switcher
+-----------------------------------------------------------------------
+
+The arm-bl-cpufreq driver provides a simple interface which models two
+clusters as two performance points.
+
+Within each CPU's cpufreq directory in sysfs
+(/sys/devices/system/cpu/cpu?/cpufreq/):
+
+cpuinfo_max_freq:
+
+	reports the dummy frequency value which corresponds to the "big"
+	cluster.
+
+cpuinfo_min_freq:
+
+	reports the dummy frequency value which corresponds to the
+	"little" cluster.
+
+cpuinfo_cur_freq:
+
+	reports the dummy frequency corresponding to the currently
+	running cluster.
+
+
+To switch clusters, either the built-in "powersave" or "performance"
+governors can be used to force the "little" or "big" cluster
+respectively; or alternatively the "userspace" governor can be used,
+
+The following script fragment demonstrates how the userspace governor
+can be used to switch:
+
+
+for x in /sys/devices/system/cpu/cpu[0-9]*; do
+	echo userspace >$x/cpufreq/scaling_governor
+done
+
+big_freq=`cat /sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq`
+little_freq=`cat /sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_min_freq`
+
+switch_to_big () {
+	echo $big_freq >/sys/devices/system/cpu/cpu0/cpufreq/scaling_setspeed
+}
+
+switch_to_little () {
+	echo $little_freq >/sys/devices/system/cpu/cpu0/cpufreq/scaling_setspeed
+}

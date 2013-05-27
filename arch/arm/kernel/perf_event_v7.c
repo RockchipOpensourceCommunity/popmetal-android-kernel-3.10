@@ -18,6 +18,175 @@
 
 #ifdef CONFIG_CPU_V7
 
+struct armv7_pmu_logical_state {
+	u32	PMCR;
+	u32	PMCNTENSET;
+	u32	PMCNTENCLR;
+	u32	PMOVSR;
+	u32	PMSWINC;
+	u32	PMSELR;
+	u32	PMCEID0;
+	u32	PMCEID1;
+
+	u32	PMCCNTR;
+
+	u32	PMUSERENR;
+	u32	PMINTENSET;
+	u32	PMINTENCLR;
+	u32	PMOVSSET;
+
+	struct armv7_pmu_logical_cntr_state {
+		u32	PMXEVTYPER;
+		u32	PMXEVCNTR;
+	} cntrs[1]; /* we will grow this during allocation */
+};
+
+#define __v7_logical_state(cpupmu) \
+	((struct armv7_pmu_logical_state *)(cpupmu)->logical_state)
+
+#define __v7_logical_state_single(cpupmu, name) \
+	__v7_logical_state(cpupmu)->name
+#define __v7_logical_state_cntr(cpupmu, name) \
+	__v7_logical_state(cpupmu)->cntrs[__v7_logical_state(cpupmu)->PMSELR].name
+
+#define __def_v7_pmu_reg_W(kind, name, op1, Cm, op2)			\
+	static inline u32 __v7_pmu_write_physical_##name(u32 value)	\
+	{								\
+		asm volatile (						\
+			"mcr p15, " #op1 ", %0, c9, " #Cm ", " #op2	\
+			:: "r" (value)					\
+		);							\
+									\
+		return value;						\
+	}								\
+									\
+	static inline u32 __v7_pmu_write_logical_##name(		\
+		struct arm_cpu_pmu *cpupmu, u32 value)			\
+	{								\
+		__v7_logical_state_##kind(cpupmu, name) = value;	\
+		return value;						\
+	}
+
+#define __def_v7_pmu_reg_R(kind, name, op1, Cm, op2)			\
+	static inline u32 __v7_pmu_read_physical_##name(void)		\
+	{								\
+		u32 result;						\
+									\
+		asm volatile (						\
+			"mrc p15, " #op1 ", %0, c9, " #Cm ", " #op2	\
+			: "=r" (result)					\
+		);							\
+									\
+		return result;						\
+	}								\
+									\
+	static inline u32 __v7_pmu_read_logical_##name(			\
+		struct arm_cpu_pmu *cpupmu)				\
+	{								\
+		return __v7_logical_state_##kind(cpupmu, name);		\
+	}
+
+#define __def_v7_pmu_reg_WO(name, op1, Cm, op2)		\
+	__def_v7_pmu_reg_W(single, name, op1, Cm, op2)
+#define __def_v7_pmu_reg_RO(name, op1, Cm, op2)		\
+	__def_v7_pmu_reg_R(single, name, op1, Cm, op2)
+
+#define __def_v7_pmu_reg_RW(name, op1, Cm, op2) \
+	__def_v7_pmu_reg_WO(name, op1, Cm, op2)	\
+	__def_v7_pmu_reg_RO(name, op1, Cm, op2)
+
+#define __def_v7_pmu_cntr_WO(name, op1, Cm, op2)	\
+	__def_v7_pmu_reg_W(cntr, name, op1, Cm, op2)
+#define __def_v7_pmu_cntr_RO(name, op1, Cm, op2)	\
+	__def_v7_pmu_reg_R(cntr, name, op1, Cm, op2)
+
+#define __def_v7_pmu_cntr_RW(name, op1, Cm, op2)	\
+	__def_v7_pmu_cntr_WO(name, op1, Cm, op2)	\
+	__def_v7_pmu_cntr_RO(name, op1, Cm, op2)
+
+#define __def_v7_pmu_reg(name, prot, op1, Cm, op2)	\
+	__def_v7_pmu_reg_##prot(name, op1, Cm, op2)
+#define __def_v7_pmu_cntr(name, prot, op1, Cm, op2)	\
+	__def_v7_pmu_cntr_##prot(name, op1, Cm, op2)
+
+__def_v7_pmu_reg(PMCR,		RW, 0, c12, 0)
+__def_v7_pmu_reg(PMCNTENSET,	RW, 0, c12, 1)
+__def_v7_pmu_reg(PMCNTENCLR,	RW, 0, c12, 2)
+__def_v7_pmu_reg(PMOVSR,	RW, 0, c12, 3)
+__def_v7_pmu_reg(PMSWINC,	WO, 0, c12, 4)
+__def_v7_pmu_reg(PMSELR,	RW, 0, c12, 5)
+__def_v7_pmu_reg(PMCEID0,	RO, 0, c12, 6)
+__def_v7_pmu_reg(PMCEID1,	RO, 0, c12, 7)
+
+__def_v7_pmu_reg(PMCCNTR,	RW, 0, c13, 0)
+__def_v7_pmu_cntr(PMXEVTYPER,	RW, 0, c13, 1)
+__def_v7_pmu_cntr(PMXEVCNTR,	RW, 0, c13, 2)
+
+__def_v7_pmu_reg(PMUSERENR,	RW, 0, c14, 0)
+__def_v7_pmu_reg(PMINTENSET,	RW, 0, c14, 1)
+__def_v7_pmu_reg(PMINTENCLR,	RW, 0, c14, 2)
+__def_v7_pmu_reg(PMOVSSET,	RW, 0, c14, 3)
+
+#define __v7_pmu_write_physical(name, value) \
+	__v7_pmu_write_physical_##name(value)
+#define __v7_pmu_read_physical(name) \
+	__v7_pmu_read_physical_##name()
+
+#define __v7_pmu_write_logical(cpupmu, name, value) \
+	__v7_pmu_write_logical_##name(cpupmu, value)
+#define __v7_pmu_read_logical(cpupmu, name) \
+	__v7_pmu_read_logical_##name(cpupmu)
+
+#define __v7_pmu_write_reg(cpupmu, name, value) do {		\
+	if ((cpupmu)->active)					\
+		__v7_pmu_write_physical(name, value);		\
+	else							\
+		__v7_pmu_write_logical(cpupmu, name, value);	\
+} while(0)
+
+#define __v7_pmu_read_reg(cpupmu, name) (		\
+	(cpupmu)->active ?				\
+		__v7_pmu_read_physical(name) :		\
+		__v7_pmu_read_logical(cpupmu, name)	\
+)
+
+#define __v7_pmu_reg_set(cpupmu, name, logical_name, mask) do {		\
+	if ((cpupmu)->active)						\
+		__v7_pmu_write_physical(name, mask);			\
+	else {								\
+		u32 __value;						\
+		__value =__v7_pmu_read_logical(cpupmu, logical_name) | (mask); \
+		__v7_pmu_write_logical(cpupmu, logical_name, __value); \
+	}								\
+} while(0)
+
+#define __v7_pmu_reg_clr(cpupmu, name, logical_name, mask) do {		\
+	if ((cpupmu)->active)						\
+		__v7_pmu_write_physical(name, mask);			\
+	else {								\
+		u32 __value;						\
+		__value = __v7_pmu_read_logical(cpupmu, logical_name) & ~(mask); \
+		__v7_pmu_write_logical(cpupmu, logical_name, __value);	\
+	}								\
+} while(0)
+
+#define __v7_pmu_save_reg(cpupmu, name)					\
+	__v7_pmu_write_logical(cpupmu, name,				\
+				__v7_pmu_read_physical(name))
+#define __v7_pmu_restore_reg(cpupmu, name)				\
+	__v7_pmu_write_physical(name,					\
+				__v7_pmu_read_logical(cpupmu, name))
+static u32 read_mpidr(void)
+{
+	u32 result;
+
+	asm volatile ("mrc p15, 0, %0, c0, c0, 5" : "=r" (result));
+
+	return result;
+}
+
+static void armv7pmu_reset(void *info);
+
 /*
  * Common ARMv7 event types
  *
@@ -784,18 +953,16 @@ static const unsigned armv7_a7_perf_cache_map[PERF_COUNT_HW_CACHE_MAX]
 #define	ARMV7_EXCLUDE_USER	(1 << 30)
 #define	ARMV7_INCLUDE_HYP	(1 << 27)
 
-static inline u32 armv7_pmnc_read(void)
+static inline u32 armv7_pmnc_read(struct arm_cpu_pmu *cpupmu)
 {
-	u32 val;
-	asm volatile("mrc p15, 0, %0, c9, c12, 0" : "=r"(val));
-	return val;
+	return __v7_pmu_read_reg(cpupmu, PMCR);
 }
 
-static inline void armv7_pmnc_write(u32 val)
+static inline void armv7_pmnc_write(struct arm_cpu_pmu *cpupmu, u32 val)
 {
 	val &= ARMV7_PMNC_MASK;
 	isb();
-	asm volatile("mcr p15, 0, %0, c9, c12, 0" : : "r"(val));
+	__v7_pmu_write_reg(cpupmu, PMCR, val);
 }
 
 static inline int armv7_pmnc_has_overflowed(u32 pmnc)
@@ -814,10 +981,10 @@ static inline int armv7_pmnc_counter_has_overflowed(u32 pmnc, int idx)
 	return pmnc & BIT(ARMV7_IDX_TO_COUNTER(idx));
 }
 
-static inline int armv7_pmnc_select_counter(int idx)
+static inline int armv7_pmnc_select_counter(struct arm_cpu_pmu *cpupmu, int idx)
 {
 	u32 counter = ARMV7_IDX_TO_COUNTER(idx);
-	asm volatile("mcr p15, 0, %0, c9, c12, 5" : : "r" (counter));
+	__v7_pmu_write_reg(cpupmu, PMSELR, counter);
 	isb();
 
 	return idx;
@@ -825,185 +992,197 @@ static inline int armv7_pmnc_select_counter(int idx)
 
 static inline u32 armv7pmu_read_counter(struct perf_event *event)
 {
-	struct arm_pmu *cpu_pmu = to_arm_pmu(event->pmu);
+	struct arm_pmu *pmu = to_arm_pmu(event->pmu);
+	struct arm_cpu_pmu *cpupmu = to_this_cpu_pmu(pmu);
 	struct hw_perf_event *hwc = &event->hw;
 	int idx = hwc->idx;
 	u32 value = 0;
 
-	if (!armv7_pmnc_counter_valid(cpu_pmu, idx))
+	if (!armv7_pmnc_counter_valid(pmu, idx))
 		pr_err("CPU%u reading wrong counter %d\n",
 			smp_processor_id(), idx);
 	else if (idx == ARMV7_IDX_CYCLE_COUNTER)
-		asm volatile("mrc p15, 0, %0, c9, c13, 0" : "=r" (value));
-	else if (armv7_pmnc_select_counter(idx) == idx)
-		asm volatile("mrc p15, 0, %0, c9, c13, 2" : "=r" (value));
+		value = __v7_pmu_read_reg(cpupmu, PMCCNTR);
+	else if (armv7_pmnc_select_counter(cpupmu, idx) == idx)
+		value = __v7_pmu_read_reg(cpupmu, PMXEVCNTR);
 
 	return value;
 }
 
 static inline void armv7pmu_write_counter(struct perf_event *event, u32 value)
 {
-	struct arm_pmu *cpu_pmu = to_arm_pmu(event->pmu);
+	struct arm_pmu *pmu = to_arm_pmu(event->pmu);
+	struct arm_cpu_pmu *cpupmu = to_this_cpu_pmu(pmu);
 	struct hw_perf_event *hwc = &event->hw;
 	int idx = hwc->idx;
 
-	if (!armv7_pmnc_counter_valid(cpu_pmu, idx))
+	if (!armv7_pmnc_counter_valid(pmu, idx))
 		pr_err("CPU%u writing wrong counter %d\n",
 			smp_processor_id(), idx);
 	else if (idx == ARMV7_IDX_CYCLE_COUNTER)
-		asm volatile("mcr p15, 0, %0, c9, c13, 0" : : "r" (value));
-	else if (armv7_pmnc_select_counter(idx) == idx)
-		asm volatile("mcr p15, 0, %0, c9, c13, 2" : : "r" (value));
+		__v7_pmu_write_reg(cpupmu, PMCCNTR, value);
+	else if (armv7_pmnc_select_counter(cpupmu, idx) == idx)
+		__v7_pmu_write_reg(cpupmu, PMXEVCNTR, value);
 }
 
-static inline void armv7_pmnc_write_evtsel(int idx, u32 val)
+static inline void armv7_pmnc_write_evtsel(struct arm_cpu_pmu *cpupmu, int idx, u32 val)
 {
-	if (armv7_pmnc_select_counter(idx) == idx) {
+	if (armv7_pmnc_select_counter(cpupmu, idx) == idx) {
 		val &= ARMV7_EVTYPE_MASK;
-		asm volatile("mcr p15, 0, %0, c9, c13, 1" : : "r" (val));
+		__v7_pmu_write_reg(cpupmu, PMXEVTYPER, val);
 	}
 }
 
-static inline int armv7_pmnc_enable_counter(int idx)
+static inline int armv7_pmnc_enable_counter(struct arm_cpu_pmu *cpupmu, int idx)
 {
 	u32 counter = ARMV7_IDX_TO_COUNTER(idx);
-	asm volatile("mcr p15, 0, %0, c9, c12, 1" : : "r" (BIT(counter)));
+	__v7_pmu_reg_set(cpupmu, PMCNTENSET, PMCNTENSET, BIT(counter));
 	return idx;
 }
 
-static inline int armv7_pmnc_disable_counter(int idx)
+static inline int armv7_pmnc_disable_counter(struct arm_cpu_pmu *cpupmu, int idx)
 {
 	u32 counter = ARMV7_IDX_TO_COUNTER(idx);
-	asm volatile("mcr p15, 0, %0, c9, c12, 2" : : "r" (BIT(counter)));
+	__v7_pmu_reg_clr(cpupmu, PMCNTENCLR, PMCNTENSET, BIT(counter));
 	return idx;
 }
 
-static inline int armv7_pmnc_enable_intens(int idx)
+static inline int armv7_pmnc_enable_intens(struct arm_cpu_pmu *cpupmu, int idx)
 {
 	u32 counter = ARMV7_IDX_TO_COUNTER(idx);
-	asm volatile("mcr p15, 0, %0, c9, c14, 1" : : "r" (BIT(counter)));
+	__v7_pmu_reg_set(cpupmu, PMINTENSET, PMCNTENSET, BIT(counter));
 	return idx;
 }
 
-static inline int armv7_pmnc_disable_intens(int idx)
+static inline int armv7_pmnc_disable_intens(struct arm_cpu_pmu *cpupmu, int idx)
 {
 	u32 counter = ARMV7_IDX_TO_COUNTER(idx);
-	asm volatile("mcr p15, 0, %0, c9, c14, 2" : : "r" (BIT(counter)));
+	__v7_pmu_reg_clr(cpupmu, PMINTENCLR, PMINTENSET, BIT(counter));
 	isb();
 	/* Clear the overflow flag in case an interrupt is pending. */
-	asm volatile("mcr p15, 0, %0, c9, c12, 3" : : "r" (BIT(counter)));
+	__v7_pmu_reg_clr(cpupmu, PMOVSR, PMOVSR, BIT(counter));
 	isb();
 
 	return idx;
 }
 
-static inline u32 armv7_pmnc_getreset_flags(void)
+static inline u32 armv7_pmnc_getreset_flags(struct arm_cpu_pmu *cpupmu)
 {
 	u32 val;
 
 	/* Read */
-	asm volatile("mrc p15, 0, %0, c9, c12, 3" : "=r" (val));
+	val = __v7_pmu_read_reg(cpupmu, PMOVSR);
 
 	/* Write to clear flags */
 	val &= ARMV7_FLAG_MASK;
-	asm volatile("mcr p15, 0, %0, c9, c12, 3" : : "r" (val));
+	__v7_pmu_reg_clr(cpupmu, PMOVSR, PMOVSR, val);
 
 	return val;
 }
 
 #ifdef DEBUG
-static void armv7_pmnc_dump_regs(struct arm_pmu *cpu_pmu)
+static void armv7_pmnc_dump_regs(struct arm_pmu *pmu)
 {
 	u32 val;
 	unsigned int cnt;
+	struct arm_cpu_pmu *cpupmu = to_this_cpu_pmu(pmu);
 
 	printk(KERN_INFO "PMNC registers dump:\n");
-
-	asm volatile("mrc p15, 0, %0, c9, c12, 0" : "=r" (val));
-	printk(KERN_INFO "PMNC  =0x%08x\n", val);
-
-	asm volatile("mrc p15, 0, %0, c9, c12, 1" : "=r" (val));
-	printk(KERN_INFO "CNTENS=0x%08x\n", val);
-
-	asm volatile("mrc p15, 0, %0, c9, c14, 1" : "=r" (val));
-	printk(KERN_INFO "INTENS=0x%08x\n", val);
-
-	asm volatile("mrc p15, 0, %0, c9, c12, 3" : "=r" (val));
-	printk(KERN_INFO "FLAGS =0x%08x\n", val);
-
-	asm volatile("mrc p15, 0, %0, c9, c12, 5" : "=r" (val));
-	printk(KERN_INFO "SELECT=0x%08x\n", val);
-
-	asm volatile("mrc p15, 0, %0, c9, c13, 0" : "=r" (val));
-	printk(KERN_INFO "CCNT  =0x%08x\n", val);
+	printk(KERN_INFO "PMNC  =0x%08x\n", __v7_pmu_read_reg(PMCR));
+	printk(KERN_INFO "CNTENS=0x%08x\n", __v7_pmu_read_reg(PMCNTENSET));
+	printk(KERN_INFO "INTENS=0x%08x\n", __v7_pmu_read_reg(PMINTENSET));
+	printk(KERN_INFO "FLAGS =0x%08x\n", __v7_pmu_read_reg(PMOVSR));
+	printk(KERN_INFO "SELECT=0x%08x\n", __v7_pmu_read_reg(PMSELR));
+	printk(KERN_INFO "CCNT  =0x%08x\n", __v7_pmu_read_reg(PMCCNTR));
 
 	for (cnt = ARMV7_IDX_COUNTER0;
-			cnt <= ARMV7_IDX_COUNTER_LAST(cpu_pmu); cnt++) {
-		armv7_pmnc_select_counter(cnt);
-		asm volatile("mrc p15, 0, %0, c9, c13, 2" : "=r" (val));
+			cnt <= ARMV7_IDX_COUNTER_LAST(pmu); cnt++) {
+		armv7_pmnc_select_counter(cpupmu, cnt);
 		printk(KERN_INFO "CNT[%d] count =0x%08x\n",
-			ARMV7_IDX_TO_COUNTER(cnt), val);
-		asm volatile("mrc p15, 0, %0, c9, c13, 1" : "=r" (val));
+			ARMV7_IDX_TO_COUNTER(cnt),
+			__v7_pmu_read_reg(cpupmu, PMXEVCNTR));
 		printk(KERN_INFO "CNT[%d] evtsel=0x%08x\n",
-			ARMV7_IDX_TO_COUNTER(cnt), val);
+			ARMV7_IDX_TO_COUNTER(cnt),
+			__v7_pmu_read_reg(cpupmu, PMXEVTYPER));
 	}
 }
 #endif
 
-static void armv7pmu_save_regs(struct arm_pmu *cpu_pmu,
+static void armv7pmu_save_regs(struct arm_pmu *pmu,
 					struct cpupmu_regs *regs)
 {
 	unsigned int cnt;
-	asm volatile("mrc p15, 0, %0, c9, c12, 0" : "=r" (regs->pmc));
-	if (!(regs->pmc & ARMV7_PMNC_E))
+	struct arm_cpu_pmu *cpupmu = to_this_cpu_pmu(pmu);
+
+	if (!cpupmu->active)
 		return;
 
-	asm volatile("mrc p15, 0, %0, c9, c12, 1" : "=r" (regs->pmcntenset));
-	asm volatile("mrc p15, 0, %0, c9, c14, 0" : "=r" (regs->pmuseren));
-	asm volatile("mrc p15, 0, %0, c9, c14, 1" : "=r" (regs->pmintenset));
-	asm volatile("mrc p15, 0, %0, c9, c13, 0" : "=r" (regs->pmxevtcnt[0]));
+	if (!*cpupmu->cpu_hw_events.used_mask)
+		return;
+
+	if (!__v7_pmu_save_reg(cpupmu, PMCR) & ARMV7_PMNC_E)
+		return;
+
+	__v7_pmu_save_reg(cpupmu, PMCNTENSET);
+	__v7_pmu_save_reg(cpupmu, PMUSERENR);
+	__v7_pmu_save_reg(cpupmu, PMINTENSET);
+	__v7_pmu_save_reg(cpupmu, PMCCNTR);
+
 	for (cnt = ARMV7_IDX_COUNTER0;
-			cnt <= ARMV7_IDX_COUNTER_LAST(cpu_pmu); cnt++) {
-		armv7_pmnc_select_counter(cnt);
-		asm volatile("mrc p15, 0, %0, c9, c13, 1"
-					: "=r"(regs->pmxevttype[cnt]));
-		asm volatile("mrc p15, 0, %0, c9, c13, 2"
-					: "=r"(regs->pmxevtcnt[cnt]));
+			cnt <= ARMV7_IDX_COUNTER_LAST(pmu); cnt++) {
+		armv7_pmnc_select_counter(cpupmu, cnt);
+		__v7_pmu_save_reg(cpupmu, PMSELR); /* mirror physical PMSELR */
+		__v7_pmu_save_reg(cpupmu, PMXEVTYPER);
+		__v7_pmu_save_reg(cpupmu, PMXEVCNTR);
 	}
 	return;
 }
 
-static void armv7pmu_restore_regs(struct arm_pmu *cpu_pmu,
+/* armv7pmu_reset() must be called before calling this funtion */
+static void armv7pmu_restore_regs(struct arm_pmu *pmu,
 					struct cpupmu_regs *regs)
 {
 	unsigned int cnt;
-	if (!(regs->pmc & ARMV7_PMNC_E))
+	u32 pmcr;
+	struct arm_cpu_pmu *cpupmu = to_this_cpu_pmu(pmu);
+
+	armv7pmu_reset(pmu);
+
+	if (!cpupmu->active)
 		return;
 
-	asm volatile("mcr p15, 0, %0, c9, c12, 1" : : "r" (regs->pmcntenset));
-	asm volatile("mcr p15, 0, %0, c9, c14, 0" : : "r" (regs->pmuseren));
-	asm volatile("mcr p15, 0, %0, c9, c14, 1" : : "r" (regs->pmintenset));
-	asm volatile("mcr p15, 0, %0, c9, c13, 0" : : "r" (regs->pmxevtcnt[0]));
+	if (!*cpupmu->cpu_hw_events.used_mask)
+		return;
+
+	pmcr = __v7_pmu_read_logical(cpupmu, PMCR);
+	if (!pmcr & ARMV7_PMNC_E)
+		return;
+
+	__v7_pmu_restore_reg(cpupmu, PMCNTENSET);
+	__v7_pmu_restore_reg(cpupmu, PMUSERENR);
+	__v7_pmu_restore_reg(cpupmu, PMINTENSET);
+	__v7_pmu_restore_reg(cpupmu, PMCCNTR);
+
 	for (cnt = ARMV7_IDX_COUNTER0;
-			cnt <= ARMV7_IDX_COUNTER_LAST(cpu_pmu); cnt++) {
-		armv7_pmnc_select_counter(cnt);
-		asm volatile("mcr p15, 0, %0, c9, c13, 1"
-					: : "r"(regs->pmxevttype[cnt]));
-		asm volatile("mcr p15, 0, %0, c9, c13, 2"
-					: : "r"(regs->pmxevtcnt[cnt]));
+			cnt <= ARMV7_IDX_COUNTER_LAST(pmu); cnt++) {
+		armv7_pmnc_select_counter(cpupmu, cnt);
+		__v7_pmu_save_reg(cpupmu, PMSELR); /* mirror physical PMSELR */
+		__v7_pmu_restore_reg(cpupmu, PMXEVTYPER);
+		__v7_pmu_restore_reg(cpupmu, PMXEVCNTR);
 	}
-	asm volatile("mcr p15, 0, %0, c9, c12, 0" : : "r" (regs->pmc));
+	__v7_pmu_write_reg(cpupmu, PMCR, pmcr);
 }
 
 static void armv7pmu_enable_event(struct perf_event *event)
 {
 	unsigned long flags;
 	struct hw_perf_event *hwc = &event->hw;
-	struct arm_pmu *cpu_pmu = to_arm_pmu(event->pmu);
-	struct pmu_hw_events *events = cpu_pmu->get_hw_events();
+	struct arm_pmu *pmu = to_arm_pmu(event->pmu);
+	struct arm_cpu_pmu *cpupmu = to_this_cpu_pmu(pmu);
+	struct pmu_hw_events *events = pmu->get_hw_events(pmu);
 	int idx = hwc->idx;
 
-	if (!armv7_pmnc_counter_valid(cpu_pmu, idx)) {
+	if (!armv7_pmnc_counter_valid(pmu, idx)) {
 		pr_err("CPU%u enabling wrong PMNC counter IRQ enable %d\n",
 			smp_processor_id(), idx);
 		return;
@@ -1018,25 +1197,25 @@ static void armv7pmu_enable_event(struct perf_event *event)
 	/*
 	 * Disable counter
 	 */
-	armv7_pmnc_disable_counter(idx);
+	armv7_pmnc_disable_counter(cpupmu, idx);
 
 	/*
 	 * Set event (if destined for PMNx counters)
 	 * We only need to set the event for the cycle counter if we
 	 * have the ability to perform event filtering.
 	 */
-	if (cpu_pmu->set_event_filter || idx != ARMV7_IDX_CYCLE_COUNTER)
-		armv7_pmnc_write_evtsel(idx, hwc->config_base);
+	if (pmu->set_event_filter || idx != ARMV7_IDX_CYCLE_COUNTER)
+		armv7_pmnc_write_evtsel(cpupmu, idx, hwc->config_base);
 
 	/*
 	 * Enable interrupt for this counter
 	 */
-	armv7_pmnc_enable_intens(idx);
+	armv7_pmnc_enable_intens(cpupmu, idx);
 
 	/*
 	 * Enable counter
 	 */
-	armv7_pmnc_enable_counter(idx);
+	armv7_pmnc_enable_counter(cpupmu,idx);
 
 	raw_spin_unlock_irqrestore(&events->pmu_lock, flags);
 }
@@ -1045,11 +1224,12 @@ static void armv7pmu_disable_event(struct perf_event *event)
 {
 	unsigned long flags;
 	struct hw_perf_event *hwc = &event->hw;
-	struct arm_pmu *cpu_pmu = to_arm_pmu(event->pmu);
-	struct pmu_hw_events *events = cpu_pmu->get_hw_events();
+	struct arm_pmu *pmu = to_arm_pmu(event->pmu);
+	struct arm_cpu_pmu *cpupmu = to_this_cpu_pmu(pmu);
+	struct pmu_hw_events *events = pmu->get_hw_events(pmu);
 	int idx = hwc->idx;
 
-	if (!armv7_pmnc_counter_valid(cpu_pmu, idx)) {
+	if (!armv7_pmnc_counter_valid(pmu, idx)) {
 		pr_err("CPU%u disabling wrong PMNC counter IRQ enable %d\n",
 			smp_processor_id(), idx);
 		return;
@@ -1063,12 +1243,12 @@ static void armv7pmu_disable_event(struct perf_event *event)
 	/*
 	 * Disable counter
 	 */
-	armv7_pmnc_disable_counter(idx);
+	armv7_pmnc_disable_counter(cpupmu, idx);
 
 	/*
 	 * Disable interrupt for this counter
 	 */
-	armv7_pmnc_disable_intens(idx);
+	armv7_pmnc_disable_intens(cpupmu, idx);
 
 	raw_spin_unlock_irqrestore(&events->pmu_lock, flags);
 }
@@ -1077,15 +1257,23 @@ static irqreturn_t armv7pmu_handle_irq(int irq_num, void *dev)
 {
 	u32 pmnc;
 	struct perf_sample_data data;
-	struct arm_pmu *cpu_pmu = (struct arm_pmu *)dev;
-	struct pmu_hw_events *cpuc = cpu_pmu->get_hw_events();
+	struct arm_pmu *pmu = (struct arm_pmu *)dev;
+	struct arm_cpu_pmu *cpupmu = to_this_cpu_pmu(pmu);
+	struct pmu_hw_events *cpuc = pmu->get_hw_events(pmu);
 	struct pt_regs *regs;
 	int idx;
+
+	if (!cpupmu->active) {
+		pr_warn_ratelimited("%s: Spurious interrupt for inactive PMU %s: event counts will be wrong.\n",
+			__func__, pmu->name);
+		pr_warn_once("This is a known interrupt affinity bug in the b.L switcher perf support.\n");
+		return IRQ_NONE;
+	}
 
 	/*
 	 * Get and reset the IRQ flags
 	 */
-	pmnc = armv7_pmnc_getreset_flags();
+	pmnc = armv7_pmnc_getreset_flags(cpupmu);
 
 	/*
 	 * Did an overflow occur?
@@ -1098,7 +1286,7 @@ static irqreturn_t armv7pmu_handle_irq(int irq_num, void *dev)
 	 */
 	regs = get_irq_regs();
 
-	for (idx = 0; idx < cpu_pmu->num_events; ++idx) {
+	for (idx = 0; idx < pmu->num_events; ++idx) {
 		struct perf_event *event = cpuc->events[idx];
 		struct hw_perf_event *hwc;
 
@@ -1120,7 +1308,7 @@ static irqreturn_t armv7pmu_handle_irq(int irq_num, void *dev)
 			continue;
 
 		if (perf_event_overflow(event, &data, regs))
-			cpu_pmu->disable(event);
+			pmu->disable(event);
 	}
 
 	/*
@@ -1135,25 +1323,27 @@ static irqreturn_t armv7pmu_handle_irq(int irq_num, void *dev)
 	return IRQ_HANDLED;
 }
 
-static void armv7pmu_start(struct arm_pmu *cpu_pmu)
+static void armv7pmu_start(struct arm_pmu *pmu)
 {
 	unsigned long flags;
-	struct pmu_hw_events *events = cpu_pmu->get_hw_events();
+	struct arm_cpu_pmu *cpupmu = to_this_cpu_pmu(pmu);
+	struct pmu_hw_events *events = pmu->get_hw_events(pmu);
 
 	raw_spin_lock_irqsave(&events->pmu_lock, flags);
 	/* Enable all counters */
-	armv7_pmnc_write(armv7_pmnc_read() | ARMV7_PMNC_E);
+	armv7_pmnc_write(cpupmu, armv7_pmnc_read(cpupmu) | ARMV7_PMNC_E);
 	raw_spin_unlock_irqrestore(&events->pmu_lock, flags);
 }
 
-static void armv7pmu_stop(struct arm_pmu *cpu_pmu)
+static void armv7pmu_stop(struct arm_pmu *pmu)
 {
 	unsigned long flags;
-	struct pmu_hw_events *events = cpu_pmu->get_hw_events();
+	struct arm_cpu_pmu *cpupmu = to_this_cpu_pmu(pmu);
+	struct pmu_hw_events *events = pmu->get_hw_events(pmu);
 
 	raw_spin_lock_irqsave(&events->pmu_lock, flags);
 	/* Disable all counters */
-	armv7_pmnc_write(armv7_pmnc_read() & ~ARMV7_PMNC_E);
+	armv7_pmnc_write(cpupmu, armv7_pmnc_read(cpupmu) & ~ARMV7_PMNC_E);
 	raw_spin_unlock_irqrestore(&events->pmu_lock, flags);
 }
 
@@ -1212,19 +1402,33 @@ static int armv7pmu_set_event_filter(struct hw_perf_event *event,
 	return 0;
 }
 
+static bool check_active(struct arm_cpu_pmu *cpupmu)
+{
+	u32 mpidr = read_mpidr();
+
+	BUG_ON(!(mpidr & 0x80000000)); /* this won't work on uniprocessor */
+
+	cpupmu->active = ((mpidr ^ cpupmu->mpidr) & 0xFFFFFF) == 0;
+	return cpupmu->active;
+}
+
 static void armv7pmu_reset(void *info)
 {
-	struct arm_pmu *cpu_pmu = (struct arm_pmu *)info;
-	u32 idx, nb_cnt = cpu_pmu->num_events;
+	struct arm_pmu *pmu = (struct arm_pmu *)info;
+	struct arm_cpu_pmu *cpupmu = to_this_cpu_pmu(pmu);
+	u32 idx, nb_cnt = pmu->num_events;
+
+	if (!check_active(cpupmu))
+		return;
 
 	/* The counter and interrupt enable registers are unknown at reset. */
 	for (idx = ARMV7_IDX_CYCLE_COUNTER; idx < nb_cnt; ++idx) {
-		armv7_pmnc_disable_counter(idx);
-		armv7_pmnc_disable_intens(idx);
+		armv7_pmnc_disable_counter(cpupmu, idx);
+		armv7_pmnc_disable_intens(cpupmu, idx);
 	}
 
 	/* Initialize & Reset PMNC: C and P bits */
-	armv7_pmnc_write(ARMV7_PMNC_P | ARMV7_PMNC_C);
+	armv7_pmnc_write(cpupmu, ARMV7_PMNC_P | ARMV7_PMNC_C);
 }
 
 static int armv7_a8_map_event(struct perf_event *event)
@@ -1257,8 +1461,13 @@ static int armv7_a7_map_event(struct perf_event *event)
 				&armv7_a7_perf_cache_map, 0xFF);
 }
 
+static void armv7pmu_cpu_init(struct arm_pmu *pmu,
+					struct arm_cpu_pmu *cpupmu);
+
 static void armv7pmu_init(struct arm_pmu *cpu_pmu)
 {
+	struct arm_cpu_pmu *cpu_pmus = cpu_pmu->cpu_pmus;
+
 	cpu_pmu->handle_irq	= armv7pmu_handle_irq;
 	cpu_pmu->enable		= armv7pmu_enable_event;
 	cpu_pmu->disable	= armv7pmu_disable_event;
@@ -1270,7 +1479,10 @@ static void armv7pmu_init(struct arm_pmu *cpu_pmu)
 	cpu_pmu->reset		= armv7pmu_reset;
 	cpu_pmu->save_regs	= armv7pmu_save_regs;
 	cpu_pmu->restore_regs	= armv7pmu_restore_regs;
+	cpu_pmu->cpu_init	= armv7pmu_cpu_init;
 	cpu_pmu->max_period	= (1LLU << 32) - 1;
+
+	cpu_pmu->cpu_pmus = cpu_pmus;
 };
 
 static u32 armv7_read_num_pmnc_events(void)
@@ -1278,10 +1490,36 @@ static u32 armv7_read_num_pmnc_events(void)
 	u32 nb_cnt;
 
 	/* Read the nb of CNTx counters supported from PMNC */
-	nb_cnt = (armv7_pmnc_read() >> ARMV7_PMNC_N_SHIFT) & ARMV7_PMNC_N_MASK;
+	nb_cnt = (__v7_pmu_read_physical(PMCR) >> ARMV7_PMNC_N_SHIFT);
+	nb_cnt &= ARMV7_PMNC_N_MASK;
 
 	/* Add the CPU cycles counter and return */
 	return nb_cnt + 1;
+}
+
+static void armv7pmu_cpu_init(struct arm_pmu *pmu,
+			      struct arm_cpu_pmu *cpupmu)
+{
+	size_t size = offsetof(struct armv7_pmu_logical_state, cntrs) +
+		pmu->num_events * sizeof(*__v7_logical_state(cpupmu));
+
+	cpupmu->logical_state = kzalloc(size, GFP_KERNEL);
+
+	/*
+	 * We need a proper error return mechanism for these init functions.
+	 * Until then, panicking the kernel is acceptable, since a failure
+	 * here is indicative of crippling memory contstraints which will
+	 * likely make the system unusable anyway:
+	 */
+	BUG_ON(!cpupmu->logical_state);
+
+	/*
+	 * Save the "read-only" ID registers in logical_state.
+	 * Because they are read-only, there are no direct accessors,
+	 * so poke them directly into the logical_state structure:
+	 */
+	__v7_logical_state(cpupmu)->PMCEID0 = __v7_pmu_read_physical(PMCEID0);
+	__v7_logical_state(cpupmu)->PMCEID1 = __v7_pmu_read_physical(PMCEID1);
 }
 
 static int armv7_a8_pmu_init(struct arm_pmu *cpu_pmu)

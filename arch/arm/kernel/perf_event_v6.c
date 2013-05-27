@@ -439,7 +439,7 @@ static void armv6pmu_enable_event(struct perf_event *event)
 	unsigned long val, mask, evt, flags;
 	struct arm_pmu *cpu_pmu = to_arm_pmu(event->pmu);
 	struct hw_perf_event *hwc = &event->hw;
-	struct pmu_hw_events *events = cpu_pmu->get_hw_events();
+	struct pmu_hw_events *events = cpu_pmu->get_hw_events(cpu_pmu);
 	int idx = hwc->idx;
 
 	if (ARMV6_CYCLE_COUNTER == idx) {
@@ -477,7 +477,7 @@ armv6pmu_handle_irq(int irq_num,
 	unsigned long pmcr = armv6_pmcr_read();
 	struct perf_sample_data data;
 	struct arm_pmu *cpu_pmu = (struct arm_pmu *)dev;
-	struct pmu_hw_events *cpuc = cpu_pmu->get_hw_events();
+	struct pmu_hw_events *cpuc = cpu_pmu->get_hw_events(cpu_pmu);
 	struct pt_regs *regs;
 	int idx;
 
@@ -533,7 +533,7 @@ armv6pmu_handle_irq(int irq_num,
 static void armv6pmu_start(struct arm_pmu *cpu_pmu)
 {
 	unsigned long flags, val;
-	struct pmu_hw_events *events = cpu_pmu->get_hw_events();
+	struct pmu_hw_events *events = cpu_pmu->get_hw_events(cpu_pmu);
 
 	raw_spin_lock_irqsave(&events->pmu_lock, flags);
 	val = armv6_pmcr_read();
@@ -545,7 +545,7 @@ static void armv6pmu_start(struct arm_pmu *cpu_pmu)
 static void armv6pmu_stop(struct arm_pmu *cpu_pmu)
 {
 	unsigned long flags, val;
-	struct pmu_hw_events *events = cpu_pmu->get_hw_events();
+	struct pmu_hw_events *events = cpu_pmu->get_hw_events(cpu_pmu);
 
 	raw_spin_lock_irqsave(&events->pmu_lock, flags);
 	val = armv6_pmcr_read();
@@ -586,7 +586,7 @@ static void armv6pmu_disable_event(struct perf_event *event)
 	unsigned long val, mask, evt, flags;
 	struct arm_pmu *cpu_pmu = to_arm_pmu(event->pmu);
 	struct hw_perf_event *hwc = &event->hw;
-	struct pmu_hw_events *events = cpu_pmu->get_hw_events();
+	struct pmu_hw_events *events = cpu_pmu->get_hw_events(cpu_pmu);
 	int idx = hwc->idx;
 
 	if (ARMV6_CYCLE_COUNTER == idx) {
@@ -621,7 +621,7 @@ static void armv6mpcore_pmu_disable_event(struct perf_event *event)
 	unsigned long val, mask, flags, evt = 0;
 	struct arm_pmu *cpu_pmu = to_arm_pmu(event->pmu);
 	struct hw_perf_event *hwc = &event->hw;
-	struct pmu_hw_events *events = cpu_pmu->get_hw_events();
+	struct pmu_hw_events *events = cpu_pmu->get_hw_events(cpu_pmu);
 	int idx = hwc->idx;
 
 	if (ARMV6_CYCLE_COUNTER == idx) {
