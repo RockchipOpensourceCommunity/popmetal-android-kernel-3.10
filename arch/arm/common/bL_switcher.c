@@ -288,7 +288,7 @@ struct bL_thread {
 	struct completion started;
 };
 
-static struct bL_thread bL_threads[MAX_CPUS_PER_CLUSTER];
+static struct bL_thread bL_threads[NR_CPUS];
 
 static int bL_switcher_thread(void *arg)
 {
@@ -341,7 +341,7 @@ int bL_switch_request(unsigned int cpu, unsigned int new_cluster_id)
 {
 	struct bL_thread *t;
 
-	if (cpu >= MAX_CPUS_PER_CLUSTER) {
+	if (cpu >= ARRAY_SIZE(bL_threads)) {
 		pr_err("%s: cpu %d out of bounds\n", __func__, cpu);
 		return -EINVAL;
 	}
@@ -366,7 +366,7 @@ EXPORT_SYMBOL_GPL(bL_switch_request);
 static DEFINE_MUTEX(bL_switcher_activation_lock);
 static BLOCKING_NOTIFIER_HEAD(bL_activation_notifier);
 static unsigned int bL_switcher_active;
-static unsigned int bL_switcher_cpu_original_cluster[MAX_CPUS_PER_CLUSTER];
+static unsigned int bL_switcher_cpu_original_cluster[NR_CPUS];
 static cpumask_t bL_switcher_removed_logical_cpus;
 
 int bL_switcher_register_notifier(struct notifier_block *nb)
@@ -402,8 +402,8 @@ static void bL_switcher_restore_cpus(void)
 
 static int bL_switcher_halve_cpus(void)
 {
-	int i, j, gic_id, ret;
-	unsigned int cpu, cluster, cntpart, mask;
+	int i, j, cluster_0, gic_id, ret;
+	unsigned int cpu, cluster, mask;
 	cpumask_t available_cpus;
 
 	/* First pass to validate what we have */
@@ -426,18 +426,30 @@ static int bL_switcher_halve_cpus(void)
 
 	/*
 	 * Now let's do the pairing.  We match each CPU with another CPU
-	 * from a different cluster.  To keep the logical CPUs contiguous,
-	 * the pairing is done backward from the end of the CPU list.
+	 * from a different cluster.  To get a uniform scheduling behavior
+	 * without fiddling with CPU topology and compute capacity data,
+	 * we'll use logical CPUs initially belonging to the same cluster.
 	 */
 	memset(bL_switcher_cpu_pairing, -1, sizeof(bL_switcher_cpu_pairing));
 	cpumask_copy(&available_cpus, cpu_online_mask);
+	cluster_0 = -1;
 	for_each_cpu(i, &available_cpus) {
 		int match = -1;
 		cluster = MPIDR_AFFINITY_LEVEL(cpu_logical_map(i), 1);
+		if (cluster_0 == -1)
+			cluster_0 = cluster;
+		if (cluster != cluster_0)
+			continue;
 		cpumask_clear_cpu(i, &available_cpus);
 		for_each_cpu(j, &available_cpus) {
-			cntpart = MPIDR_AFFINITY_LEVEL(cpu_logical_map(j), 1);
-			if (cntpart != cluster)
+			cluster = MPIDR_AFFINITY_LEVEL(cpu_logical_map(j), 1);
+			/*
+			 * Let's remember the last match to create "odd"
+			 * pairing on purpose in order for other code not
+			 * to assume any relation between physical and
+			 * logical CPU numbers.
+			 */
+			if (cluster != cluster_0)
 				match = j;
 		}
 		if (match != -1) {
