@@ -102,7 +102,7 @@ struct clk *vexpress_clk_register_spc(const char *name, int cluster_id)
 #if defined(CONFIG_OF)
 void __init vexpress_clk_of_register_spc(void)
 {
-	char name[9] = "cluster";
+	char name[9] = "clusterX";
 	struct device_node *node = NULL;
 	struct clk *clk;
 	const u32 *val;
