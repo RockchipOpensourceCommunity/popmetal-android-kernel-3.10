@@ -772,6 +772,8 @@ static void set_pin_eapd(struct hda_codec *codec, hda_nid_t pin, bool enable)
 		return;
 	if (codec->inv_eapd)
 		enable = !enable;
+	if (spec->keep_eapd_on && !enable)
+		return;
 	snd_hda_codec_update_cache(codec, pin, 0,
 				   AC_VERB_SET_EAPD_BTLENABLE,
 				   enable ? 0x02 : 0x00);
@@ -2072,6 +2074,14 @@ get_multiio_path(struct hda_codec *codec, int idx)
 
 static void update_automute_all(struct hda_codec *codec);
 
+/* Default value to be passed as aamix argument for snd_hda_activate_path();
+ * used for output paths
+ */
+static bool aamix_default(struct hda_gen_spec *spec)
+{
+	return !spec->have_aamix_ctl || spec->aamix_mode;
+}
+
 static int set_multi_io(struct hda_codec *codec, int idx, bool output)
 {
 	struct hda_gen_spec *spec = codec->spec;
@@ -2087,11 +2097,11 @@ static int set_multi_io(struct hda_codec *codec, int idx, bool output)
 
 	if (output) {
 		set_pin_target(codec, nid, PIN_OUT, true);
-		snd_hda_activate_path(codec, path, true, true);
+		snd_hda_activate_path(codec, path, true, aamix_default(spec));
 		set_pin_eapd(codec, nid, true);
 	} else {
 		set_pin_eapd(codec, nid, false);
-		snd_hda_activate_path(codec, path, false, true);
+		snd_hda_activate_path(codec, path, false, aamix_default(spec));
 		set_pin_target(codec, nid, spec->multi_io[idx].ctl_in, true);
 		path_power_down_sync(codec, path);
 	}
@@ -2182,8 +2192,8 @@ static void update_aamix_paths(struct hda_codec *codec, bool do_mix,
 		snd_hda_activate_path(codec, mix_path, true, true);
 		path_power_down_sync(codec, nomix_path);
 	} else {
-		snd_hda_activate_path(codec, mix_path, false, true);
-		snd_hda_activate_path(codec, nomix_path, true, true);
+		snd_hda_activate_path(codec, mix_path, false, false);
+		snd_hda_activate_path(codec, nomix_path, true, false);
 		path_power_down_sync(codec, mix_path);
 	}
 }
@@ -3663,6 +3673,36 @@ static void update_automute_all(struct hda_codec *codec)
 		snd_hda_gen_mic_autoswitch(codec, NULL);
 }
 
+/* call appropriate hooks */
+static void call_hp_automute(struct hda_codec *codec, struct hda_jack_tbl *jack)
+{
+	struct hda_gen_spec *spec = codec->spec;
+	if (spec->hp_automute_hook)
+		spec->hp_automute_hook(codec, jack);
+	else
+		snd_hda_gen_hp_automute(codec, jack);
+}
+
+static void call_line_automute(struct hda_codec *codec,
+			       struct hda_jack_tbl *jack)
+{
+	struct hda_gen_spec *spec = codec->spec;
+	if (spec->line_automute_hook)
+		spec->line_automute_hook(codec, jack);
+	else
+		snd_hda_gen_line_automute(codec, jack);
+}
+
+static void call_mic_autoswitch(struct hda_codec *codec,
+				struct hda_jack_tbl *jack)
+{
+	struct hda_gen_spec *spec = codec->spec;
+	if (spec->mic_autoswitch_hook)
+		spec->mic_autoswitch_hook(codec, jack);
+	else
+		snd_hda_gen_mic_autoswitch(codec, jack);
+}
+
 /*
  * Auto-Mute mode mixer enum support
  */
@@ -3797,9 +3837,7 @@ static int check_auto_mute_availability(struct hda_codec *codec)
 		snd_printdd("hda-codec: Enable HP auto-muting on NID 0x%x\n",
 			    nid);
 		snd_hda_jack_detect_enable_callback(codec, nid, HDA_GEN_HP_EVENT,
-						    spec->hp_automute_hook ?
-						    spec->hp_automute_hook :
-						    snd_hda_gen_hp_automute);
+						    call_hp_automute);
 		spec->detect_hp = 1;
 	}
 
@@ -3812,9 +3850,7 @@ static int check_auto_mute_availability(struct hda_codec *codec)
 				snd_printdd("hda-codec: Enable Line-Out auto-muting on NID 0x%x\n", nid);
 				snd_hda_jack_detect_enable_callback(codec, nid,
 								    HDA_GEN_FRONT_EVENT,
-								    spec->line_automute_hook ?
-								    spec->line_automute_hook :
-								    snd_hda_gen_line_automute);
+								    call_line_automute);
 				spec->detect_lo = 1;
 			}
 		spec->automute_lo_possible = spec->detect_hp;
@@ -3856,9 +3892,7 @@ static bool auto_mic_check_imux(struct hda_codec *codec)
 		snd_hda_jack_detect_enable_callback(codec,
 						    spec->am_entry[i].pin,
 						    HDA_GEN_MIC_EVENT,
-						    spec->mic_autoswitch_hook ?
-						    spec->mic_autoswitch_hook :
-						    snd_hda_gen_mic_autoswitch);
+						    call_mic_autoswitch);
 	return true;
 }
 
@@ -4729,7 +4763,8 @@ static void set_output_and_unmute(struct hda_codec *codec, int path_idx)
 		return;
 	pin = path->path[path->depth - 1];
 	restore_pin_ctl(codec, pin);
-	snd_hda_activate_path(codec, path, path->active, true);
+	snd_hda_activate_path(codec, path, path->active,
+			      aamix_default(codec->spec));
 	set_pin_eapd(codec, pin, path->active);
 }
 
@@ -4779,7 +4814,8 @@ static void init_multi_io(struct hda_codec *codec)
 		if (!spec->multi_io[i].ctl_in)
 			spec->multi_io[i].ctl_in =
 				snd_hda_codec_get_pin_target(codec, pin);
-		snd_hda_activate_path(codec, path, path->active, true);
+		snd_hda_activate_path(codec, path, path->active,
+				      aamix_default(spec));
 	}
 }
 

@@ -1235,11 +1235,13 @@ static bool intel_sdvo_get_hw_state(struct intel_encoder *encoder,
 	struct drm_device *dev = encoder->base.dev;
 	struct drm_i915_private *dev_priv = dev->dev_private;
 	struct intel_sdvo *intel_sdvo = to_intel_sdvo(&encoder->base);
+	u16 active_outputs;
 	u32 tmp;
 
 	tmp = I915_READ(intel_sdvo->sdvo_reg);
+	intel_sdvo_get_active_outputs(intel_sdvo, &active_outputs);
 
-	if (!(tmp & SDVO_ENABLE))
+	if (!(tmp & SDVO_ENABLE) && (active_outputs == 0))
 		return false;
 
 	if (HAS_PCH_CPT(dev))
@@ -1768,7 +1770,7 @@ static void intel_sdvo_get_lvds_modes(struct drm_connector *connector)
 	 * Assume that the preferred modes are
 	 * arranged in priority order.
 	 */
-	intel_ddc_get_modes(connector, intel_sdvo->i2c);
+	intel_ddc_get_modes(connector, &intel_sdvo->ddc);
 	if (list_empty(&connector->probed_modes) == false)
 		goto end;
 
@@ -2739,7 +2741,6 @@ bool intel_sdvo_init(struct drm_device *dev, uint32_t sdvo_reg, bool is_sdvob)
 	struct intel_sdvo *intel_sdvo;
 	u32 hotplug_mask;
 	int i;
-
 	intel_sdvo = kzalloc(sizeof(struct intel_sdvo), GFP_KERNEL);
 	if (!intel_sdvo)
 		return false;

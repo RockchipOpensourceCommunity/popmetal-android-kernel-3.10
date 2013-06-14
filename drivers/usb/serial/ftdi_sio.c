@@ -189,7 +189,10 @@ static struct usb_device_id id_table_combined [] = {
 	{ USB_DEVICE(FTDI_VID, FTDI_OPENDCC_THROTTLE_PID) },
 	{ USB_DEVICE(FTDI_VID, FTDI_OPENDCC_GATEWAY_PID) },
 	{ USB_DEVICE(FTDI_VID, FTDI_OPENDCC_GBM_PID) },
+	{ USB_DEVICE(FTDI_VID, FTDI_OPENDCC_GBM_BOOST_PID) },
 	{ USB_DEVICE(NEWPORT_VID, NEWPORT_AGILIS_PID) },
+	{ USB_DEVICE(NEWPORT_VID, NEWPORT_CONEX_CC_PID) },
+	{ USB_DEVICE(NEWPORT_VID, NEWPORT_CONEX_AGP_PID) },
 	{ USB_DEVICE(INTERBIOMETRICS_VID, INTERBIOMETRICS_IOBOARD_PID) },
 	{ USB_DEVICE(INTERBIOMETRICS_VID, INTERBIOMETRICS_MINI_IOBOARD_PID) },
 	{ USB_DEVICE(FTDI_VID, FTDI_SPROG_II) },
@@ -870,7 +873,9 @@ static struct usb_device_id id_table_combined [] = {
 	{ USB_DEVICE(FTDI_VID, FTDI_DOTEC_PID) },
 	{ USB_DEVICE(QIHARDWARE_VID, MILKYMISTONE_JTAGSERIAL_PID),
 		.driver_info = (kernel_ulong_t)&ftdi_jtag_quirk },
-	{ USB_DEVICE(ST_VID, ST_STMCLT1030_PID),
+	{ USB_DEVICE(ST_VID, ST_STMCLT_2232_PID),
+		.driver_info = (kernel_ulong_t)&ftdi_jtag_quirk },
+	{ USB_DEVICE(ST_VID, ST_STMCLT_4232_PID),
 		.driver_info = (kernel_ulong_t)&ftdi_stmclite_quirk },
 	{ USB_DEVICE(FTDI_VID, FTDI_RF_R106) },
 	{ USB_DEVICE(FTDI_VID, FTDI_DISTORTEC_JTAG_LOCK_PICK_PID),
@@ -926,8 +931,8 @@ static int ftdi_get_icount(struct tty_struct *tty,
 static int  ftdi_ioctl(struct tty_struct *tty,
 			unsigned int cmd, unsigned long arg);
 static void ftdi_break_ctl(struct tty_struct *tty, int break_state);
-static int ftdi_chars_in_buffer(struct tty_struct *tty);
-static int ftdi_get_modem_status(struct tty_struct *tty,
+static bool ftdi_tx_empty(struct usb_serial_port *port);
+static int ftdi_get_modem_status(struct usb_serial_port *port,
 						unsigned char status[2]);
 
 static unsigned short int ftdi_232am_baud_base_to_divisor(int baud, int base);
@@ -963,7 +968,7 @@ static struct usb_serial_driver ftdi_sio_device = {
 	.ioctl =		ftdi_ioctl,
 	.set_termios =		ftdi_set_termios,
 	.break_ctl =		ftdi_break_ctl,
-	.chars_in_buffer =      ftdi_chars_in_buffer,
+	.tx_empty =		ftdi_tx_empty,
 };
 
 static struct usb_serial_driver * const serial_drivers[] = {
@@ -1792,20 +1797,24 @@ static int ftdi_8u2232c_probe(struct usb_serial *serial)
 }
 
 /*
- * First and second port on STMCLiteadaptors is reserved for JTAG interface
- * and the forth port for pio
+ * First two ports on JTAG adaptors using an FT4232 such as STMicroelectronics's
+ * ST Micro Connect Lite are reserved for JTAG or other non-UART interfaces and
+ * can be accessed from userspace.
+ * The next two ports are enabled as UARTs by default, where port 2 is
+ * a conventional RS-232 UART.
  */
 static int ftdi_stmclite_probe(struct usb_serial *serial)
 {
 	struct usb_device *udev = serial->dev;
 	struct usb_interface *interface = serial->interface;
 
-	if (interface == udev->actconfig->interface[2])
-		return 0;
+	if (interface == udev->actconfig->interface[0] ||
+	    interface == udev->actconfig->interface[1]) {
+		dev_info(&udev->dev, "Ignoring serial port reserved for JTAG\n");
+		return -ENODEV;
+	}
 
-	dev_info(&udev->dev, "Ignoring serial port reserved for JTAG\n");
-
-	return -ENODEV;
+	return 0;
 }
 
 /*
@@ -2083,27 +2092,18 @@ static void ftdi_break_ctl(struct tty_struct *tty, int break_state)
 
 }
 
-static int ftdi_chars_in_buffer(struct tty_struct *tty)
+static bool ftdi_tx_empty(struct usb_serial_port *port)
 {
-	struct usb_serial_port *port = tty->driver_data;
-	int chars;
 	unsigned char buf[2];
 	int ret;
 
-	chars = usb_serial_generic_chars_in_buffer(tty);
-	if (chars)
-		goto out;
-
-	/* Check if hardware buffer is empty. */
-	ret = ftdi_get_modem_status(tty, buf);
+	ret = ftdi_get_modem_status(port, buf);
 	if (ret == 2) {
 		if (!(buf[1] & FTDI_RS_TEMT))
-			chars = 1;
+			return false;
 	}
-out:
-	dev_dbg(&port->dev, "%s - %d\n", __func__, chars);
 
-	return chars;
+	return true;
 }
 
 /* old_termios contains the original termios settings and tty->termios contains
@@ -2295,10 +2295,9 @@ no_c_cflag_changes:
  * Returns the number of status bytes retrieved (device dependant), or
  * negative error code.
  */
-static int ftdi_get_modem_status(struct tty_struct *tty,
+static int ftdi_get_modem_status(struct usb_serial_port *port,
 						unsigned char status[2])
 {
-	struct usb_serial_port *port = tty->driver_data;
 	struct ftdi_private *priv = usb_get_serial_port_data(port);
 	unsigned char *buf;
 	int len;
@@ -2363,7 +2362,7 @@ static int ftdi_tiocmget(struct tty_struct *tty)
 	unsigned char buf[2];
 	int ret;
 
-	ret = ftdi_get_modem_status(tty, buf);
+	ret = ftdi_get_modem_status(port, buf);
 	if (ret < 0)
 		return ret;
 
