@@ -156,7 +156,8 @@ static u32 cci_pmu_get_max_counters(void)
 	return n_cnts + 1;
 }
 
-static struct pmu_hw_events *cci_pmu_get_hw_events(void)
+static struct pmu_hw_events *cci_pmu_get_hw_events(
+	struct arm_pmu *__always_unused pmu)
 {
 	return &cci_hw_events;
 }
@@ -233,7 +234,7 @@ static int cci_pmu_request_irq(struct arm_pmu *cci_pmu, irq_handler_t handler)
 static irqreturn_t cci_pmu_handle_irq(int irq_num, void *dev)
 {
 	struct arm_pmu *cci_pmu = (struct arm_pmu *)dev;
-	struct pmu_hw_events *events = cci_pmu->get_hw_events();
+	struct pmu_hw_events *events = cci_pmu->get_hw_events(cci_pmu);
 	struct perf_sample_data data;
 	struct pt_regs *regs;
 	int idx;
@@ -285,7 +286,7 @@ static void cci_pmu_enable_event(struct perf_event *event)
 {
 	unsigned long flags;
 	struct arm_pmu *cci_pmu = to_arm_pmu(event->pmu);
-	struct pmu_hw_events *events = cci_pmu->get_hw_events();
+	struct pmu_hw_events *events = cci_pmu->get_hw_events(cci_pmu);
 	struct hw_perf_event *hw_counter = &event->hw;
 	int idx = hw_counter->idx;
 
@@ -309,7 +310,7 @@ static void cci_pmu_disable_event(struct perf_event *event)
 {
 	unsigned long flags;
 	struct arm_pmu *cci_pmu = to_arm_pmu(event->pmu);
-	struct pmu_hw_events *events = cci_pmu->get_hw_events();
+	struct pmu_hw_events *events = cci_pmu->get_hw_events(cci_pmu);
 	struct hw_perf_event *hw_counter = &event->hw;
 	int idx = hw_counter->idx;
 
@@ -330,7 +331,7 @@ static void cci_pmu_start(struct arm_pmu *cci_pmu)
 	u32 val;
 	unsigned long flags;
 	struct cci_drvdata *info = platform_get_drvdata(cci_pmu->plat_device);
-	struct pmu_hw_events *events = cci_pmu->get_hw_events();
+	struct pmu_hw_events *events = cci_pmu->get_hw_events(cci_pmu);
 
 	raw_spin_lock_irqsave(&events->pmu_lock, flags);
 
@@ -346,7 +347,7 @@ static void cci_pmu_stop(struct arm_pmu *cci_pmu)
 	u32 val;
 	unsigned long flags;
 	struct cci_drvdata *info = platform_get_drvdata(cci_pmu->plat_device);
-	struct pmu_hw_events *events = cci_pmu->get_hw_events();
+	struct pmu_hw_events *events = cci_pmu->get_hw_events(cci_pmu);
 
 	raw_spin_lock_irqsave(&events->pmu_lock, flags);
 
