@@ -391,12 +391,12 @@ u64 (*arch_timer_read_counter)(void) = arch_counter_get_cntvct;
 
 static cycle_t arch_counter_read(struct clocksource *cs)
 {
-	return arch_counter_get_cntvct();
+	return arch_timer_read_counter();
 }
 
 static cycle_t arch_counter_read_cc(const struct cyclecounter *cc)
 {
-	return arch_counter_get_cntvct();
+	return arch_timer_read_counter();
 }
 
 static struct clocksource clocksource_counter = {
@@ -428,6 +428,10 @@ static void __init arch_counter_register(unsigned type)
 		arch_timer_read_counter = arch_counter_get_cntvct;
 	else
 		arch_timer_read_counter = arch_counter_get_cntvct_mem;
+
+	if (!arch_timer_use_virtual)
+		if (arch_timer_read_counter == arch_counter_get_cntvct)
+			arch_timer_read_counter = arch_counter_get_cntpct;
 
 	start_count = arch_timer_read_counter();
 	clocksource_register_hz(&clocksource_counter, arch_timer_rate);

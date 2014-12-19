@@ -19,10 +19,11 @@
 #include <linux/slab.h>
 #include <linux/mmc/host.h>
 #include <linux/mmc/mmc.h>
-#include <linux/mmc/dw_mmc.h>
+#include <linux/mmc/rk_mmc.h>
 #include <linux/of.h>
 
-#include "dw_mmc.h"
+#include "rk_sdmmc.h"
+
 
 int dw_mci_pltfm_register(struct platform_device *pdev,
 				const struct dw_mci_drv_data *drv_data)
@@ -48,6 +49,9 @@ int dw_mci_pltfm_register(struct platform_device *pdev,
 	host->irq_flags = 0;
 	host->pdata = pdev->dev.platform_data;
 	host->regs = devm_ioremap_resource(&pdev->dev, regs);
+        #ifdef CONFIG_MMC_DW_IDMAC
+        host->phy_regs = (void *)(regs->start);
+        #endif
 	if (IS_ERR(host->regs))
 		return PTR_ERR(host->regs);
 

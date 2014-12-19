@@ -51,6 +51,10 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/printk.h>
 
+#ifdef CONFIG_EARLY_PRINTK_DIRECT
+extern void printascii(char *);
+#endif
+
 /* printk's without a loglevel use this.. */
 #define DEFAULT_MESSAGE_LOGLEVEL CONFIG_DEFAULT_MESSAGE_LOGLEVEL
 
@@ -302,6 +306,12 @@ static u32 log_next(u32 idx)
 	return idx + msg->len;
 }
 
+#ifdef CONFIG_RK_LAST_LOG
+extern void rk_last_log_text(char *text, size_t size);
+static char rk_text[1024];
+static size_t msg_print_text(const struct log *msg, enum log_flags prev,
+			     bool syslog, char *buf, size_t size);
+#endif
 /* insert record into the buffer, discard old ones, update heads */
 static void log_store(int facility, int level,
 		      enum log_flags flags, u64 ts_nsec,
@@ -358,6 +368,10 @@ static void log_store(int facility, int level,
 	memset(log_dict(msg) + dict_len, 0, pad_len);
 	msg->len = sizeof(struct log) + text_len + dict_len + pad_len;
 
+#ifdef CONFIG_RK_LAST_LOG
+	size = msg_print_text(msg, msg->flags, true, rk_text, sizeof(rk_text));
+	rk_last_log_text(rk_text, size);
+#endif
 	/* insert message */
 	log_next_idx += msg->len;
 	log_next_seq++;
@@ -1578,6 +1592,10 @@ asmlinkage int vprintk_emit(int facility, int level,
 		}
 	}
 
+#ifdef CONFIG_EARLY_PRINTK_DIRECT
+	printascii(text);
+#endif
+
 	if (level == -1)
 		level = default_message_loglevel;
 
@@ -1699,6 +1717,12 @@ asmlinkage int printk(const char *fmt, ...)
 }
 EXPORT_SYMBOL(printk);
 
+#if defined(CONFIG_RK_DEBUG_UART) && (CONFIG_RK_DEBUG_UART >= 0)
+void console_disable_suspend(void)
+{
+	console_suspended = 0;
+}
+#endif
 #else /* CONFIG_PRINTK */
 
 #define LOG_LINE_MAX		0
