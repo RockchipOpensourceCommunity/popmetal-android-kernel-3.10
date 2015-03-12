@@ -26,6 +26,7 @@ typedef uint32_t uint32;
 
 #ifdef CONFIG_FB_ROCKCHIP
 #define DDR_CHANGE_FREQ_IN_LCDC_VSYNC
+//#define DDR_CHANGE_FREQ_LCDC_DCLK_HOLD
 #endif
 /***********************************
  * Global Control Macro
@@ -3655,8 +3656,10 @@ static noinline uint32 ddr_change_freq_sram(void *arg)
     uint32 gpllvaluel;
     freq_t *p_freq_t=(freq_t *)arg;    
     uint32 nMHz=p_freq_t->nMHz;
+#ifdef DDR_CHANGE_FREQ_LCDC_DCLK_HOLD
 	static struct rk_screen screen;
 	static int dclk_div, down_dclk_div;
+#endif
 
 #if defined (DDR_CHANGE_FREQ_IN_LCDC_VSYNC)
     struct ddr_freq_t *p_ddr_freq_t=p_freq_t->p_ddr_freq_t;
@@ -3669,6 +3672,7 @@ static noinline uint32 ddr_change_freq_sram(void *arg)
         freq_slew = (nMHz>ddr_freq)? 1 : 0;
     }
 #endif
+#ifdef DDR_CHANGE_FREQ_LCDC_DCLK_HOLD
 	if (!screen.mode.pixclock) {
 		rk_fb_get_prmry_screen(&screen);
 		if (screen.lcdc_id == 0)
@@ -3677,6 +3681,7 @@ static noinline uint32 ddr_change_freq_sram(void *arg)
 			dclk_div = (cru_readl(RK3288_CRU_CLKSELS_CON(29)) >> 8) & 0xff;
 		down_dclk_div = 64*(dclk_div+1)-1;
 	}
+#endif
     param.arm_freq = ddr_get_pll_freq(APLL);
     gpllvaluel = ddr_get_pll_freq(GPLL);
     if((200 < gpllvaluel) ||( gpllvaluel <1600))      //GPLL:200MHz~1600MHz
@@ -3750,23 +3755,27 @@ static noinline uint32 ddr_change_freq_sram(void *arg)
     param.freq_slew = freq_slew;
     param.dqstr_value = dqstr_value;
 	rk_fb_set_prmry_screen_status(SCREEN_PREPARE_DDR_CHANGE);
+#ifdef DDR_CHANGE_FREQ_LCDC_DCLK_HOLD
 	if (screen.lcdc_id == 0)
 		cru_writel(0 | CRU_W_MSK_SETBITS(down_dclk_div, 8, 0xff),
 			   RK3288_CRU_CLKSELS_CON(27));
 	else if (screen.lcdc_id == 1)
 		cru_writel(0 | CRU_W_MSK_SETBITS(down_dclk_div, 8, 0xff),
 			   RK3288_CRU_CLKSELS_CON(29));
+#endif
 
     call_with_stack(fn_to_pie(rockchip_pie_chunk, &FUNC(ddr_change_freq_sram)),
                     &param,
                     rockchip_sram_stack-(NR_CPUS-1)*PAUSE_CPU_STACK_SIZE);
 
+#ifdef DDR_CHANGE_FREQ_LCDC_DCLK_HOLD
 	if (screen.lcdc_id == 0)
 		cru_writel(0 | CRU_W_MSK_SETBITS(dclk_div, 8, 0xff),
 		RK3288_CRU_CLKSELS_CON(27));
 	else if (screen.lcdc_id == 1)
 		cru_writel(0 | CRU_W_MSK_SETBITS(dclk_div, 8, 0xff),
 		RK3288_CRU_CLKSELS_CON(29));
+#endif
 	rk_fb_set_prmry_screen_status(SCREEN_UNPREPARE_DDR_CHANGE);
 
 #if defined (DDR_CHANGE_FREQ_IN_LCDC_VSYNC)

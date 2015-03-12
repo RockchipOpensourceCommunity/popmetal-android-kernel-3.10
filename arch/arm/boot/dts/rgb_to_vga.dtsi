@@ -5,7 +5,7 @@
 
 / {
 	disp_timings: display-timings {
-		native-mode = <&timing1>;
+		native-mode = <&timing2>;
 		timing0: timing0 {
 		 	screen-type = <SCREEN_RGB>;
 		 	out-face = <OUT_P888>;
