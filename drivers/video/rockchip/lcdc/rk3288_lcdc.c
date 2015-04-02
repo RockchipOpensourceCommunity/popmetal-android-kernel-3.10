@@ -3848,17 +3848,4 @@ static struct platform_driver rk3288_lcdc_driver = {
 	.shutdown = rk3288_lcdc_shutdown,
 };
 
-static int __init rk3288_lcdc_module_init(void)
-{
-	return platform_driver_register(&rk3288_lcdc_driver);
-}
-
-static void __exit rk3288_lcdc_module_exit(void)
-{
-	platform_driver_unregister(&rk3288_lcdc_driver);
-}
-
-fs_initcall(rk3288_lcdc_module_init);
-module_exit(rk3288_lcdc_module_exit);
-
-
+module_platform_driver(rk3288_lcdc_driver);

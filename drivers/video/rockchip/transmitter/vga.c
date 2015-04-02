@@ -65,8 +65,6 @@ static int i2c_master_reg8_recv(const struct i2c_client *client,
         return (ret == 2)? count : ret;
 }
 
-
-
 static unsigned char *rk29fb_ddc_read(struct i2c_client *client)
 {
 	int rc;
@@ -112,10 +110,10 @@ static int vga_mode2screen(struct fb_videomode *modedb, struct rk_screen *screen
 	screen->type = SCREEN_RGB;
 	screen->face = OUT_P888;
 
-	screen->pin_vsync = (screen->mode.sync & FB_SYNC_VERT_HIGH_ACT) ? 1:0;
-	screen->pin_hsync = (screen->mode.sync & FB_SYNC_HOR_HIGH_ACT) ? 1:0;
+	screen->pin_vsync = (screen->mode.sync & FB_SYNC_VERT_HIGH_ACT) ? 1 : 0;
+	screen->pin_hsync = (screen->mode.sync & FB_SYNC_HOR_HIGH_ACT) ? 1 : 0;
 	screen->pin_den = 0;
-	screen->pin_dclk = 0;
+	screen->pin_dclk = 1;
 
 	/* Swap rule */
 	screen->swap_rb = 0;
@@ -130,18 +128,35 @@ static int vga_mode2screen(struct fb_videomode *modedb, struct rk_screen *screen
 	return 0;
 }
 
-
-static int vga_switch_screen(struct rockchip_vga *vga, int indx)
+static int vga_switch_screen(struct rockchip_vga *vga)
 {
-	struct fb_videomode *mode = &vga->specs.modedb[indx];
+	struct fb_videomode *best_mode;
 	struct rk_screen *screen = &vga->screen;
+	struct fb_monspecs *specs = &vga->specs;
+//	int i;
 
-	vga_mode2screen(mode, screen);
+	/*
+	 * best_mode VGA recommend from edid I think is first one.
+	 * I guess...
+	 */
+	best_mode = &specs->modedb[0];
+#if 0
+	for (i = 0; i < specs->modedb_len; i++) {
+		if (best_mode->yres * )
+		if ((best_mode->yres * best_mode->xres) <
+		    (specs->modedb[i].yres * specs->modedb[i].xres))
+			best_mode = &specs->modedb[i];
+	}
+#endif
+
+	vga_mode2screen(best_mode, screen);
+
+	rk_fb_set_screen(screen);
 //	rk_fb_switch_screen(screen, 1 ,vga->lcdc_id);
-	vga->indx = indx;
 
 	return 0;
 }
+
 static int vga_get_screen_info(struct rockchip_vga *vga)
 {
 	u8 *edid;
@@ -278,7 +293,7 @@ static int vga_i2c_probe(struct i2c_client *client,const struct i2c_device_id *i
 	ret = vga_get_screen_info(vga);
 	if (ret < 0)
 		goto err;
-	vga_switch_screen(vga, 7);
+	vga_switch_screen(vga);
 	
 	printk("VGA probe successful\n");
 	return 0;

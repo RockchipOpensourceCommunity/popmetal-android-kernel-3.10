@@ -30,6 +30,13 @@ int rk_fb_set_prmry_screen(struct rk_screen *screen)
 	return 0;
 }
 
+int rk_fb_set_screen(struct rk_screen *screen)
+{
+	memcpy(rk_screen, screen, sizeof(*screen));
+
+	return 0;
+}
+
 size_t get_fb_size(void)
 {
 	size_t size = 0;
