@@ -630,6 +630,7 @@
 		headset_gpio = <&gpio8 GPIO_A3 GPIO_ACTIVE_LOW>;
 		hook_gpio = <&gpio7 GPIO_B7>;
                 hook_down_type = "HOOK_DOWN_LOW";
+		spkcon_gpio = <&gpio0 GPIO_B3 GPIO_ACTIVE_HIGH>;
        };
 
 	key {

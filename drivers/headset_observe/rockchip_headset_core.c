@@ -73,6 +73,28 @@ static int rockchip_headset_probe(struct platform_device *pdev)
 		pdata->headset_insert_type = (flags & OF_GPIO_ACTIVE_LOW) ? HEADSET_IN_LOW : HEADSET_IN_HIGH;
 	}
 
+	/*
+	 * Todo:
+	 * default enable spkcon gpio now, autoswitch need some more work.
+	 */
+	pdata->spkcon_gpio = of_get_named_gpio_flags(node, "spkcon_gpio", 0, &flags);
+	if (pdata->spkcon_gpio < 0) {
+		printk("%s() Can not read property spkcon_gpio\n", __FUNCTION__);
+		goto err;
+	}
+
+	ret = devm_gpio_request(&pdev->dev, pdata->spkcon_gpio, "spkcon_gpio");
+	if (ret < 0) {
+			dev_err(&pdev->dev, "failed to request GPIO: %d\n", ret);
+			return ret;
+	} else {
+		ret = gpio_direction_output(pdata->spkcon_gpio, 1);
+		if (ret < 0) {
+			dev_err(&pdev->dev, "failed to setup GPIO: %d\n", ret);
+			return ret;
+		}
+	}
+
 	//hook
 	ret = of_get_named_gpio_flags(node, "hook_gpio", 0, &pdata->hook_gpio);
 	if (ret < 0) {

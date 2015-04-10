@@ -14,6 +14,8 @@ struct rk_headset_pdata{
 //hook about
 	unsigned int hook_gpio;
 	unsigned int hook_down_type; //Hook key down status  
+//spkcon about
+	int spkcon_gpio;
 #ifdef CONFIG_MODEM_MIC_SWITCH
 //mic about	
 	unsigned int mic_switch_gpio;
