@@ -604,11 +604,6 @@
 			gpios= <&gpio7 GPIO_C5 GPIO_ACTIVE_HIGH>;
                        rockchip,delay = <10>;
                };
-               lcd_he:lcd_he {
-                       rockchip,power_type = <GPIO>;
-		       gpios= <&gpio0 GPIO_B3 GPIO_ACTIVE_HIGH>;
-                       rockchip,delay = <10>;
-               };
 	};
 };
 
