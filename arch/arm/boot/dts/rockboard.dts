@@ -641,7 +641,7 @@
 		vol-down-key {
 			linux,code = <114>;
 			label = "volume down";
-			rockchip,adc_value = <170>;
+			rockchip,adc_value = <253>;
 		};
 		
 		power-key {
@@ -651,29 +651,12 @@
 			gpio-key,wakeup;
 		};
 
-		menu-key {
-			linux,code = <59>;
-			label = "menu";
-			rockchip,adc_value = <355>;
-		};
-
 		home-key {
 			linux,code = <102>;
 			label = "home";
-			rockchip,adc_value = <746>;
+			rockchip,adc_value = <512>;
 		};
 
-		back-key {
-			linux,code = <158>;
-			label = "back";
-			rockchip,adc_value = <560>;
-		};
-
-		camera-key {
-			linux,code = <212>;
-			label = "camera";
-			rockchip,adc_value = <450>;
-		};
 	};
 };
 
