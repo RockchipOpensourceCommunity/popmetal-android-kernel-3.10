@@ -48,6 +48,7 @@ module_param(dbg_thresd, int, S_IRUGO | S_IWUSR);
 	if (unlikely(dbg_thresd >= level))	\
 		printk(KERN_INFO x); } while (0)
 
+static int rk3288_lcdc_enable_irq(struct rk_lcdc_driver *dev_drv);
 static int rk3288_lcdc_set_bcsh(struct rk_lcdc_driver *dev_drv,
 				     bool enable);
 
@@ -1210,6 +1211,7 @@ static int rk3288_load_screen(struct rk_lcdc_driver *dev_drv, bool initscreen)
 	}
 	spin_unlock(&lcdc_dev->reg_lock);
 	rk3288_lcdc_set_dclk(dev_drv);
+	rk3288_lcdc_enable_irq(dev_drv);
 	if (dev_drv->trsm_ops && dev_drv->trsm_ops->enable)
 		dev_drv->trsm_ops->enable();
 	if (screen->init)
