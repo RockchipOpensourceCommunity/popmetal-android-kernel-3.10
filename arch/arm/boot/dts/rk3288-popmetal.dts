@@ -1,7 +1,7 @@
 /dts-v1/;
 
 #include "rk3288.dtsi"
-#include "rgb_to_vga.dtsi"
+#include "lcd-vga.dtsi"
 
 / {
 	fiq-debugger {
