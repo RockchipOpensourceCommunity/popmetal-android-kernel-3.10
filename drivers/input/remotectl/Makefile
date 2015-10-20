@@ -5,3 +5,4 @@
 
 
 obj-$(CONFIG_ROCKCHIP_REMOTECTL_PWM)      += rockchip_pwm_remotectl.o
+obj-$(CONFIG_ROCKCHIP_REMOTECTL_GPIO)      += rkxx_remotectl.o

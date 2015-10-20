@@ -154,7 +154,14 @@
 		gpios = <&gpio0 GPIO_A6 GPIO_ACTIVE_HIGH>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&ir_recv_pin>;
+        status = "disabled";
 	};
+
+    rkxx-remotectl{
+        compatible = "rockchip,remotectl";
+        module-gpios = <&gpio0 GPIO_A6 GPIO_ACTIVE_LOW>;
+        status = "okay";
+    };
 };
 
 &gmac {
