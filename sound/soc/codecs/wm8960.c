@@ -17,6 +17,8 @@
 #include <linux/pm.h>
 #include <linux/i2c.h>
 #include <linux/slab.h>
+#include <linux/gpio.h>
+#include <linux/of_gpio.h>
 #include <sound/core.h>
 #include <sound/pcm.h>
 #include <sound/pcm_params.h>
@@ -115,8 +117,10 @@ enum wm8960_play_type{
 
 /* playback register list */
 static struct reg_default playback_power_up_list[] = {
-	{0x02, 0x0173},
-	{0x03, 0x0173},
+	{0x00, 0x012e},
+	{0x01, 0x012e},
+	{0x02, 0x017a},
+	{0x03, 0x017a},
 	{0x04, 0x0000},
 	{0x05, 0x0000},
 	{0x06, 0x0008},
@@ -155,8 +159,9 @@ static struct reg_default playback_power_down_list[] = {
 
 /* capture register list */
 static struct reg_default capture_power_up_list[] = {
-	{0x00, 0x0113},
-	{0x01, 0x0113},
+	{0x00, 0x012e},
+	{0x01, 0x012e},
+	{0x05, 0x0000},
 	{0x15, 0x01c3},
 	{0x16, 0x01c3},
 	{0x19, 0x00fe},
@@ -195,6 +200,7 @@ struct wm8960_priv {
 	struct snd_soc_dapm_widget *out3;
 	bool deemph;
 	int playback_fs;
+	int enable_gpio;
 	struct dentry * debugfs_dir;
 };
 
@@ -399,10 +405,10 @@ SND_SOC_DAPM_MIXER("Left Boost Mixer", WM8960_POWER1, 5, 0,
 SND_SOC_DAPM_MIXER("Right Boost Mixer", WM8960_POWER1, 4, 0,
 		   wm8960_rin_boost, ARRAY_SIZE(wm8960_rin_boost)),
 
-SND_SOC_DAPM_MIXER("Left Input Mixer", WM8960_POWER3, 5, 0,
-		   wm8960_lin, ARRAY_SIZE(wm8960_lin)),
-SND_SOC_DAPM_MIXER("Right Input Mixer", WM8960_POWER3, 4, 0,
-		   wm8960_rin, ARRAY_SIZE(wm8960_rin)),
+//SND_SOC_DAPM_MIXER("Left Input Mixer", WM8960_POWER3, 5, 0,
+//		   wm8960_lin, ARRAY_SIZE(wm8960_lin)),
+//SND_SOC_DAPM_MIXER("Right Input Mixer", WM8960_POWER3, 4, 0,
+//		   wm8960_rin, ARRAY_SIZE(wm8960_rin)),
 
 SND_SOC_DAPM_ADC("Left ADC", "Capture", WM8960_POWER1, 3, 0),
 SND_SOC_DAPM_ADC("Right ADC", "Capture", WM8960_POWER1, 2, 0),
@@ -664,10 +670,11 @@ static int wm8960_hw_params(struct snd_pcm_substream *substream,
 		wm8960_set_deemph(codec);
 	} else {
 		for (i = 0; i < ARRAY_SIZE(alc_rates); i++)
-			if (alc_rates[i].rate == params_rate(params))
+			if (alc_rates[i].rate == params_rate(params)) {
 				snd_soc_update_bits(codec,
 						    WM8960_ADDCTL3, 0x7,
 						    alc_rates[i].val);
+			}
 	}
 
 	/* set iface */
@@ -1082,6 +1089,7 @@ static int wm8960_startup(struct snd_pcm_substream *substream,
 				struct snd_soc_dai *dai)
 {
 	struct snd_soc_codec * codec = dai->codec;
+	struct wm8960_priv *wm8960 = snd_soc_codec_get_drvdata(codec);
 	bool playback = (substream->stream == SNDRV_PCM_STREAM_PLAYBACK);
 	
 	pr_info("%s : substream->stream : %s \n", __func__,
@@ -1089,7 +1097,11 @@ static int wm8960_startup(struct snd_pcm_substream *substream,
 
 	if (playback == true) {
 		/* excute PLAYBACK function */
+		wm8960_power_down(codec, WM8960_PLAYBACK);
 		wm8960_power_up(codec, WM8960_PLAYBACK);
+
+		if (gpio_is_valid(wm8960->enable_gpio))
+			gpio_set_value(wm8960->enable_gpio, 1);
 	} else {
 		/* excute CAPTURE function */
 		wm8960_power_up(codec, WM8960_CAPTURE);
@@ -1101,6 +1113,8 @@ static void wm8960_shutdown(struct snd_pcm_substream *substream,
 			struct snd_soc_dai *dai)
 {
 	struct snd_soc_codec * codec = dai->codec;
+	struct wm8960_priv *wm8960 = snd_soc_codec_get_drvdata(codec);
+
 	bool playback = (substream->stream == SNDRV_PCM_STREAM_PLAYBACK);
 
 	pr_info("%s : substream->stream : %s \n", __func__,
@@ -1109,6 +1123,9 @@ static void wm8960_shutdown(struct snd_pcm_substream *substream,
 	if (playback == true) {
 		/* excute PLAYBACK function */
 		wm8960_power_down(codec, WM8960_PLAYBACK);
+
+		if (gpio_is_valid(wm8960->enable_gpio))
+			gpio_set_value(wm8960->enable_gpio, 0);
 	} else {
 		/* excute CAPTURE function */
 		wm8960_power_down(codec, WM8960_CAPTURE);
@@ -1332,7 +1349,9 @@ static int wm8960_i2c_probe(struct i2c_client *i2c,
 			    const struct i2c_device_id *id)
 {
 	struct wm8960_data *pdata = dev_get_platdata(&i2c->dev);
+	struct device_node *node = i2c->dev.of_node;
 	struct wm8960_priv *wm8960;
+	enum of_gpio_flags flags;
 	int ret;
 
 	wm8960 = devm_kzalloc(&i2c->dev, sizeof(struct wm8960_priv),
@@ -1369,6 +1388,9 @@ static int wm8960_i2c_probe(struct i2c_client *i2c,
 
 	ret = snd_soc_register_codec(&i2c->dev,
 			&soc_codec_dev_wm8960, &wm8960_dai, 1);
+
+	wm8960->enable_gpio = of_get_named_gpio_flags(node, "headphone-gpios",
+						      0, &flags);
 
 	return ret;
 }

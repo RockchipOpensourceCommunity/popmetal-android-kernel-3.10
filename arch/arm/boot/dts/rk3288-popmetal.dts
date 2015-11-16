@@ -348,6 +348,7 @@
 	wm8960: wm8960@1a {
 		compatible = "wm8960";
 		reg = <0x1a>;
+		headphone-gpios = <&gpio0 GPIO_B3 GPIO_ACTIVE_HIGH>;
 	};
 
 	vga: vga@50 {
